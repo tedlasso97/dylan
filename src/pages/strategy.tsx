@@ -4,8 +4,11 @@ import Layout from "@/components/Layout";
 
 const cx = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(" ");
 
-type Country = "CA" | "US";
 type AccountType = "RRIF" | "LIF" | "RRSP" | "FHSA" | "TFSA" | "RESP" | "BANK";
+type ProvinceCode = "AB" | "BC" | "MB" | "NB" | "NL" | "NS" | "ON" | "PE" | "QC" | "SK";
+
+/** Upper bound for TFSA cash dividend yield in UI (30%). */
+const MAX_TFSA_DIVIDEND_YIELD = 0.3;
 
 interface AccountInput {
   id: string;
@@ -23,15 +26,27 @@ interface SweepToggles {
 
 interface StrategyInput {
   age: number;
-  country: Country;
+  province: ProvinceCode;
   incomeCad: number;
   annualSurplusCad: number;
   annualLivingSpendCad: number;
+  /** Annual cash dividend yield inside TFSA only (e.g. 0.10 = 10%). Unrealized cap gains inside TFSA are not modeled. */
+  assumedTfsaDividendYield: number;
+  /** Extra non-reg price return if the same dollars were invested outside TFSA (optional; default 0). */
+  assumedNonRegCapitalAppreciation: number;
   tfsaRoomCad: number;
   rrspRoomCad: number;
   fhsaRoomCad: number;
   respRoomCad: number;
   expectedTaxRateInRetirement: number;
+}
+
+interface PartnerInput {
+  name: string;
+  age: number;
+  incomeCad: number;
+  annualSurplusCad: number;
+  annualLivingSpendCad: number;
 }
 
 interface StrategyResult {
@@ -47,19 +62,141 @@ const STORAGE_KEY = "strategy-page-v1";
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-const marginalRateFromIncome = (income: number, country: Country): number => {
-  if (country === "US") {
-    if (income <= 15000) return 0.1;
-    if (income <= 60000) return 0.22;
-    if (income <= 120000) return 0.24;
-    if (income <= 250000) return 0.32;
-    return 0.37;
+const PROVINCE_OPTIONS: { code: ProvinceCode; label: string }[] = [
+  { code: "AB", label: "Alberta" },
+  { code: "BC", label: "British Columbia" },
+  { code: "MB", label: "Manitoba" },
+  { code: "NB", label: "New Brunswick" },
+  { code: "NL", label: "Newfoundland and Labrador" },
+  { code: "NS", label: "Nova Scotia" },
+  { code: "ON", label: "Ontario" },
+  { code: "PE", label: "Prince Edward Island" },
+  { code: "QC", label: "Quebec" },
+  { code: "SK", label: "Saskatchewan" },
+];
+
+type TaxBracket = { upTo: number; rate: number };
+
+/**
+ * Estimated combined marginal tax rates (federal + provincial) for regular income.
+ * Brackets are simplified for planning and aligned to common published combined rates.
+ */
+const COMBINED_MARGINAL_TAX_BRACKETS: Record<ProvinceCode, TaxBracket[]> = {
+  AB: [
+    { upTo: 55867, rate: 0.25 },
+    { upTo: 111733, rate: 0.305 },
+    { upTo: 148269, rate: 0.36 },
+    { upTo: 177922, rate: 0.38 },
+    { upTo: 246752, rate: 0.41 },
+    { upTo: Infinity, rate: 0.48 },
+  ],
+  BC: [
+    { upTo: 49279, rate: 0.2006 },
+    { upTo: 55867, rate: 0.227 },
+    { upTo: 98560, rate: 0.2815 },
+    { upTo: 113158, rate: 0.31 },
+    { upTo: 127299, rate: 0.338 },
+    { upTo: 172602, rate: 0.383 },
+    { upTo: 177922, rate: 0.41 },
+    { upTo: 246752, rate: 0.438 },
+    { upTo: 259829, rate: 0.466 },
+    { upTo: Infinity, rate: 0.535 },
+  ],
+  MB: [
+    { upTo: 55867, rate: 0.2525 },
+    { upTo: 79925, rate: 0.2775 },
+    { upTo: 111733, rate: 0.338 },
+    { upTo: 173205, rate: 0.379 },
+    { upTo: 177922, rate: 0.43 },
+    { upTo: 246752, rate: 0.434 },
+    { upTo: Infinity, rate: 0.5035 },
+  ],
+  NB: [
+    { upTo: 51306, rate: 0.244 },
+    { upTo: 55867, rate: 0.255 },
+    { upTo: 102614, rate: 0.295 },
+    { upTo: 111733, rate: 0.335 },
+    { upTo: 173205, rate: 0.355 },
+    { upTo: 177922, rate: 0.395 },
+    { upTo: 246752, rate: 0.44 },
+    { upTo: Infinity, rate: 0.529 },
+  ],
+  NL: [
+    { upTo: 43198, rate: 0.238 },
+    { upTo: 55867, rate: 0.323 },
+    { upTo: 86395, rate: 0.373 },
+    { upTo: 111733, rate: 0.383 },
+    { upTo: 154244, rate: 0.413 },
+    { upTo: 215943, rate: 0.443 },
+    { upTo: 246752, rate: 0.483 },
+    { upTo: 431887, rate: 0.513 },
+    { upTo: 863775, rate: 0.523 },
+    { upTo: 1295662, rate: 0.543 },
+    { upTo: Infinity, rate: 0.583 },
+  ],
+  NS: [
+    { upTo: 30507, rate: 0.2379 },
+    { upTo: 55867, rate: 0.295 },
+    { upTo: 61256, rate: 0.3167 },
+    { upTo: 93000, rate: 0.35 },
+    { upTo: 111733, rate: 0.3717 },
+    { upTo: 150000, rate: 0.4175 },
+    { upTo: 173205, rate: 0.4382 },
+    { upTo: 177922, rate: 0.466 },
+    { upTo: 246752, rate: 0.4975 },
+    { upTo: Infinity, rate: 0.54 },
+  ],
+  ON: [
+    { upTo: 52886, rate: 0.2005 },
+    { upTo: 55867, rate: 0.2415 },
+    { upTo: 105775, rate: 0.2965 },
+    { upTo: 111733, rate: 0.3148 },
+    { upTo: 150000, rate: 0.3543 },
+    { upTo: 173205, rate: 0.3729 },
+    { upTo: 177922, rate: 0.4341 },
+    { upTo: 220000, rate: 0.4829 },
+    { upTo: 246752, rate: 0.4975 },
+    { upTo: Infinity, rate: 0.5353 },
+  ],
+  PE: [
+    { upTo: 32656, rate: 0.237 },
+    { upTo: 55867, rate: 0.287 },
+    { upTo: 64313, rate: 0.327 },
+    { upTo: 111733, rate: 0.377 },
+    { upTo: 173205, rate: 0.405 },
+    { upTo: 177922, rate: 0.437 },
+    { upTo: 246752, rate: 0.447 },
+    { upTo: Infinity, rate: 0.517 },
+  ],
+  QC: [
+    { upTo: 53255, rate: 0.2675 },
+    { upTo: 55867, rate: 0.32 },
+    { upTo: 106495, rate: 0.36 },
+    { upTo: 111733, rate: 0.3745 },
+    { upTo: 129590, rate: 0.45 },
+    { upTo: 173205, rate: 0.47 },
+    { upTo: 177922, rate: 0.4746 },
+    { upTo: Infinity, rate: 0.5311 },
+  ],
+  SK: [
+    { upTo: 53463, rate: 0.255 },
+    { upTo: 55867, rate: 0.26 },
+    { upTo: 106717, rate: 0.295 },
+    { upTo: 111733, rate: 0.32 },
+    { upTo: 142058, rate: 0.35 },
+    { upTo: 173205, rate: 0.375 },
+    { upTo: 177922, rate: 0.41 },
+    { upTo: 246752, rate: 0.435 },
+    { upTo: Infinity, rate: 0.475 },
+  ],
+};
+
+const marginalRateFromIncomeCad = (income: number, province: ProvinceCode): number => {
+  const brackets = COMBINED_MARGINAL_TAX_BRACKETS[province];
+  for (const bracket of brackets) {
+    if (income <= bracket.upTo) return bracket.rate;
   }
-  if (income <= 55867) return 0.205;
-  if (income <= 111733) return 0.305;
-  if (income <= 173205) return 0.36;
-  if (income <= 246752) return 0.43;
-  return 0.48;
+  return brackets[brackets.length - 1].rate;
 };
 
 const growthOn = (balance: number, annualReturnPct: number) => balance * (annualReturnPct / 100);
@@ -79,15 +216,25 @@ const clamp = (value: number, min: number, max: number): number => Math.min(max,
 
 const sanitizeStrategyInput = (raw: Partial<StrategyInput> | null | undefined): StrategyInput => ({
   age: clamp(Math.round(toFiniteNumber(raw?.age, 42)), 0, 150),
-  country: raw?.country === "US" ? "US" : "CA",
+  province: PROVINCE_OPTIONS.some((p) => p.code === raw?.province) ? (raw?.province as ProvinceCode) : "AB",
   incomeCad: Math.max(0, toFiniteNumber(raw?.incomeCad, 145000)),
   annualSurplusCad: Math.max(0, toFiniteNumber(raw?.annualSurplusCad, 40000)),
   annualLivingSpendCad: Math.max(0, toFiniteNumber(raw?.annualLivingSpendCad, 90000)),
+  assumedTfsaDividendYield: clamp(toFiniteNumber(raw?.assumedTfsaDividendYield, 0.1), 0, MAX_TFSA_DIVIDEND_YIELD),
+  assumedNonRegCapitalAppreciation: clamp(toFiniteNumber(raw?.assumedNonRegCapitalAppreciation, 0), 0, 1),
   tfsaRoomCad: Math.max(0, toFiniteNumber(raw?.tfsaRoomCad, 7000)),
   rrspRoomCad: Math.max(0, toFiniteNumber(raw?.rrspRoomCad, 22000)),
   fhsaRoomCad: Math.max(0, toFiniteNumber(raw?.fhsaRoomCad, 8000)),
   respRoomCad: Math.max(0, toFiniteNumber(raw?.respRoomCad, 2500)),
   expectedTaxRateInRetirement: clamp(toFiniteNumber(raw?.expectedTaxRateInRetirement, 0.3), 0, 1),
+});
+
+const sanitizePartnerInput = (raw: Partial<PartnerInput> | null | undefined): PartnerInput => ({
+  name: typeof raw?.name === "string" && raw.name.trim().length > 0 ? raw.name : "Partner",
+  age: clamp(Math.round(toFiniteNumber(raw?.age, 40)), 0, 150),
+  incomeCad: Math.max(0, toFiniteNumber(raw?.incomeCad, 90000)),
+  annualSurplusCad: Math.max(0, toFiniteNumber(raw?.annualSurplusCad, 20000)),
+  annualLivingSpendCad: Math.max(0, toFiniteNumber(raw?.annualLivingSpendCad, 50000)),
 });
 
 const sanitizeAccounts = (raw: unknown): AccountInput[] => {
@@ -108,10 +255,12 @@ export default function StrategyPage() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [input, setInput] = useState<StrategyInput>({
     age: 42,
-    country: "CA",
+    province: "AB",
     incomeCad: 145000,
     annualSurplusCad: 40000,
     annualLivingSpendCad: 90000,
+    assumedTfsaDividendYield: 0.1,
+    assumedNonRegCapitalAppreciation: 0,
     tfsaRoomCad: 7000,
     rrspRoomCad: 22000,
     fhsaRoomCad: 8000,
@@ -130,6 +279,14 @@ export default function StrategyPage() {
     { id: uid(), type: "TFSA", balance: 120000, annualReturnPct: 5 },
     { id: uid(), type: "BANK", balance: 30000, annualReturnPct: 3 },
   ]);
+  const [includePartner, setIncludePartner] = useState(false);
+  const [partner, setPartner] = useState<PartnerInput>({
+    name: "Partner",
+    age: 40,
+    incomeCad: 90000,
+    annualSurplusCad: 20000,
+    annualLivingSpendCad: 50000,
+  });
   const [draftValues, setDraftValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -142,6 +299,8 @@ export default function StrategyPage() {
       if (parsed?.sweep) setSweep(parsed.sweep);
       if (typeof parsed?.compoundInsideTfsa === "boolean") setCompoundInsideTfsa(parsed.compoundInsideTfsa);
       if (Array.isArray(parsed?.accounts)) setAccounts(sanitizeAccounts(parsed.accounts));
+      if (typeof parsed?.includePartner === "boolean") setIncludePartner(parsed.includePartner);
+      if (parsed?.partner) setPartner(sanitizePartnerInput(parsed.partner));
       if (typeof parsed?.isDarkMode === "boolean") setIsDarkMode(parsed.isDarkMode);
     } catch (err) {
       console.error("Failed to restore strategy page state", err);
@@ -157,10 +316,12 @@ export default function StrategyPage() {
         sweep,
         compoundInsideTfsa,
         accounts,
+        includePartner,
+        partner,
         isDarkMode,
       })
     );
-  }, [input, sweep, compoundInsideTfsa, accounts, isDarkMode]);
+  }, [input, sweep, compoundInsideTfsa, accounts, includePartner, partner, isDarkMode]);
 
   const themed = (light: string, dark: string) => (isDarkMode ? dark : light);
   const beginNumberDraft = (key: string, value: number) => {
@@ -194,19 +355,33 @@ export default function StrategyPage() {
     "mt-1 w-full rounded-xl px-3 py-2 glass-input"
   );
   const softTextClass = cx("text-sm", themed("text-slate-600", "text-slate-300"));
-  const bracketRate = useMemo(() => marginalRateFromIncome(input.incomeCad, input.country), [input.incomeCad, input.country]);
+  const householdIncomeCad = includePartner ? input.incomeCad + partner.incomeCad : input.incomeCad;
+  const householdSurplusCad = includePartner ? input.annualSurplusCad + partner.annualSurplusCad : input.annualSurplusCad;
+  const bracketRate = useMemo(
+    () => marginalRateFromIncomeCad(householdIncomeCad, input.province),
+    [householdIncomeCad, input.province]
+  );
 
   const accountSummary = useMemo(() => {
     const totalBalance = accounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
     const projectedGrowth = accounts.reduce((s, a) => s + growthOn(Number(a.balance) || 0, Number(a.annualReturnPct) || 0), 0);
-    return { totalBalance, projectedGrowth };
+    // Annual tax drag in this model applies only to non-registered (BANK) growth. TFSA/RRSP/RRIF/etc. are not taxed yearly on growth here.
+    const nonRegisteredGrowth = accounts
+      .filter((a) => a.type === "BANK")
+      .reduce((s, a) => s + growthOn(Number(a.balance) || 0, Number(a.annualReturnPct) || 0), 0);
+    return { totalBalance, projectedGrowth, nonRegisteredGrowth };
   }, [accounts]);
 
   const strategyResults = useMemo<StrategyResult[]>(() => {
-    const surplus = Math.max(0, input.annualSurplusCad);
-    const growth = accountSummary.projectedGrowth;
-    const bankTaxDrag = growth * bracketRate;
-    const tfsaShelterValue = compoundInsideTfsa ? Math.min(surplus, input.tfsaRoomCad) * (bracketRate * 0.05) : 0;
+    const surplus = Math.max(0, householdSurplusCad);
+    const nonRegGrowth = accountSummary.nonRegisteredGrowth;
+    const annualTaxDragNonReg = nonRegGrowth * bracketRate;
+    const tfsaContrib = compoundInsideTfsa ? Math.min(surplus, input.tfsaRoomCad) : 0;
+    // One-year benefit: cash sheltered in TFSA avoids tax on the same dividend yield as if it were non-registered.
+    // Uses ordinary-income marginal as a simple proxy (eligible dividend gross-up not modeled).
+    // Same dividend stream if invested outside TFSA (cash dividends only), plus optional non-reg price return.
+    const nonRegTaxableReturnProxy = input.assumedTfsaDividendYield + input.assumedNonRegCapitalAppreciation;
+    const tfsaShelterValue = compoundInsideTfsa ? tfsaContrib * nonRegTaxableReturnProxy * bracketRate : 0;
 
     const sweepOrder: { key: keyof SweepToggles; room: number; taxCreditRate: number; grantRate: number; cap?: number; label: string }[] = [
       { key: "resp", room: input.respRoomCad, taxCreditRate: 0, grantRate: 0.2, cap: 500, label: "RESP" },
@@ -234,9 +409,11 @@ export default function StrategyPage() {
       if (remaining <= 0) break;
     }
 
-    const sweepNet = surplus + taxSaved + grant - bankTaxDrag;
-    const tfsaOnlyNet = surplus + tfsaShelterValue - bankTaxDrag;
-    const mixedNet = surplus + taxSaved * 0.65 + grant * 0.7 + tfsaShelterValue * 0.6 - bankTaxDrag;
+    // Net scores: surplus + strategy benefits only. Tax on *existing* non-registered (BANK) balances is shown
+    // separately as taxedGrowthDragCad — applying it here made TFSA/compound rows go negative incorrectly.
+    const sweepNet = surplus + taxSaved + grant;
+    const tfsaOnlyNet = surplus + tfsaShelterValue;
+    const mixedNet = surplus + taxSaved * 0.65 + grant * 0.7 + tfsaShelterValue * 0.6;
 
     return [
       {
@@ -244,7 +421,7 @@ export default function StrategyPage() {
         netOneYearCad: sweepNet,
         taxSavedCad: taxSaved,
         grantCad: grant,
-        taxedGrowthDragCad: bankTaxDrag,
+        taxedGrowthDragCad: annualTaxDragNonReg,
         notes,
       },
       {
@@ -252,19 +429,33 @@ export default function StrategyPage() {
         netOneYearCad: tfsaOnlyNet,
         taxSavedCad: tfsaShelterValue,
         grantCad: 0,
-        taxedGrowthDragCad: bankTaxDrag,
-        notes: [`TFSA contribution used: $${fmt(Math.min(surplus, input.tfsaRoomCad))}`],
+        taxedGrowthDragCad: annualTaxDragNonReg,
+        notes: [
+          `TFSA contribution used: $${fmt(tfsaContrib)} (one-year shelter vs same ${pct(input.assumedTfsaDividendYield)} cash dividend yield outside TFSA${input.assumedNonRegCapitalAppreciation > 0 ? ` + ${pct(input.assumedNonRegCapitalAppreciation)} non-reg price return` : ""}; marginal proxy).`,
+        ],
       },
       {
         name: "Balanced Mix",
         netOneYearCad: mixedNet,
         taxSavedCad: taxSaved * 0.65 + tfsaShelterValue * 0.6,
         grantCad: grant * 0.7,
-        taxedGrowthDragCad: bankTaxDrag,
+        taxedGrowthDragCad: annualTaxDragNonReg,
         notes: ["Blends registered sweep with TFSA compounding."],
       },
     ];
-  }, [accountSummary.projectedGrowth, bracketRate, compoundInsideTfsa, input, sweep]);
+  }, [
+    accountSummary.nonRegisteredGrowth,
+    bracketRate,
+    compoundInsideTfsa,
+    householdSurplusCad,
+    input.fhsaRoomCad,
+    input.respRoomCad,
+    input.rrspRoomCad,
+    input.tfsaRoomCad,
+    input.assumedNonRegCapitalAppreciation,
+    input.assumedTfsaDividendYield,
+    sweep,
+  ]);
 
   const best = useMemo(
     () => strategyResults.reduce((max, current) => (current.netOneYearCad > max.netOneYearCad ? current : max), strategyResults[0]),
@@ -272,12 +463,12 @@ export default function StrategyPage() {
   );
 
   const breakevens = useMemo(() => {
-    const tfsaExpectedReturn = 0.05;
+    const tfsaExpectedReturn = clamp(input.assumedTfsaDividendYield + input.assumedNonRegCapitalAppreciation, 0, 1);
     const bankNeededReturn = bracketRate >= 0.99 ? 0 : tfsaExpectedReturn / (1 - bracketRate);
-    const rrspVsTfsaWithdrawalRate = bracketRate;
+    const rrspVsTfsaWithdrawalRate = input.expectedTaxRateInRetirement;
     const sweepVsTfsaDelta = strategyResults[0].netOneYearCad - strategyResults[1].netOneYearCad;
-    return { bankNeededReturn, rrspVsTfsaWithdrawalRate, sweepVsTfsaDelta };
-  }, [bracketRate, strategyResults]);
+    return { bankNeededReturn, rrspVsTfsaWithdrawalRate, sweepVsTfsaDelta, tfsaExpectedReturn };
+  }, [bracketRate, input.assumedNonRegCapitalAppreciation, input.assumedTfsaDividendYield, input.expectedTaxRateInRetirement, strategyResults]);
 
   const correctnessChecks = useMemo(() => {
     const monotonic = strategyResults.every((r) => Number.isFinite(r.netOneYearCad) && r.netOneYearCad >= 0);
@@ -289,7 +480,7 @@ export default function StrategyPage() {
         ok: monotonic,
       },
       {
-        label: "Auto-matched marginal tax rate stays in plausible range (0%-60%)",
+        label: "Approx. marginal rate stays in plausible range (0%-60%)",
         ok: taxBound,
       },
       {
@@ -307,7 +498,7 @@ export default function StrategyPage() {
             <div>
               <h1 className="text-3xl font-bold">Strategy Lab</h1>
               <p className={softTextClass}>
-                Compare sweep vs TFSA compounding and find breakeven points by client profile.
+                Canadian planning view: compare surplus deployment (sweep vs TFSA) using approximate marginal rates. Not tax advice.
               </p>
             </div>
             <button
@@ -348,10 +539,17 @@ export default function StrategyPage() {
                   />
                 </label>
                 <label className="text-sm">
-                  Country
-                  <select value={input.country} onChange={(e) => setInput({ ...input, country: e.target.value as Country })} className={inputClass}>
-                    <option value="CA">Canada</option>
-                    <option value="US">United States</option>
+                  Province
+                  <select
+                    value={input.province}
+                    onChange={(e) => setInput((prev) => ({ ...prev, province: e.target.value as ProvinceCode }))}
+                    className={inputClass}
+                  >
+                    {PROVINCE_OPTIONS.map((province) => (
+                      <option key={province.code} value={province.code}>
+                        {province.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label className="text-sm">
@@ -427,9 +625,179 @@ export default function StrategyPage() {
                     className={inputClass}
                   />
                 </label>
+                <label className="text-sm">
+                  Non-reg price return (optional)
+                  <input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step="0.01"
+                    value={displayNumber("assumedNonRegCapitalAppreciation", input.assumedNonRegCapitalAppreciation)}
+                    onFocus={() => beginNumberDraft("assumedNonRegCapitalAppreciation", input.assumedNonRegCapitalAppreciation)}
+                    onChange={(e) => updateNumberDraft("assumedNonRegCapitalAppreciation", e.target.value)}
+                    onBlur={() =>
+                      commitNumberDraft(
+                        "assumedNonRegCapitalAppreciation",
+                        (n) => setInput((prev) => ({ ...prev, assumedNonRegCapitalAppreciation: n })),
+                        { min: 0, max: 1 }
+                      )
+                    }
+                    className={inputClass}
+                  />
+                </label>
+              </div>
+              <div className="rounded-xl border border-white/10 p-3 glass-panel-soft space-y-2">
+                <div className="text-sm font-medium">TFSA cash dividend yield (only)</div>
+                <input
+                  type="range"
+                  min={0}
+                  max={MAX_TFSA_DIVIDEND_YIELD}
+                  step={0.001}
+                  value={input.assumedTfsaDividendYield}
+                  onChange={(e) => {
+                    const next = clamp(toFiniteNumber(e.target.value, input.assumedTfsaDividendYield), 0, MAX_TFSA_DIVIDEND_YIELD);
+                    setInput((prev) => ({ ...prev, assumedTfsaDividendYield: next }));
+                    setDraftValues((prev) => {
+                      const { assumedTfsaDividendYield: _removed, ...rest } = prev;
+                      return rest;
+                    });
+                  }}
+                  className="w-full accent-cyan-400"
+                />
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                  <input
+                    type="number"
+                    min={0}
+                    max={MAX_TFSA_DIVIDEND_YIELD}
+                    step="0.001"
+                    value={displayNumber("assumedTfsaDividendYield", input.assumedTfsaDividendYield)}
+                    onFocus={() => beginNumberDraft("assumedTfsaDividendYield", input.assumedTfsaDividendYield)}
+                    onChange={(e) => updateNumberDraft("assumedTfsaDividendYield", e.target.value)}
+                    onBlur={() =>
+                      commitNumberDraft(
+                        "assumedTfsaDividendYield",
+                        (n) => setInput((prev) => ({ ...prev, assumedTfsaDividendYield: n })),
+                        { min: 0, max: MAX_TFSA_DIVIDEND_YIELD }
+                      )
+                    }
+                    className={cx(inputClass, "mt-0 flex-1")}
+                  />
+                  <span className={cx("text-xs sm:text-sm", themed("text-slate-600", "text-slate-300"))}>
+                    Current: <span className="font-semibold">{pct(input.assumedTfsaDividendYield)}</span> (max {pct(MAX_TFSA_DIVIDEND_YIELD)})
+                  </span>
+                </div>
+              </div>
+              <div className="space-y-3 rounded-xl border border-white/10 p-3 glass-panel-soft">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={includePartner}
+                    onChange={(e) => setIncludePartner(e.target.checked)}
+                    className="h-4 w-4 accent-cyan-400"
+                  />
+                  Add spouse/partner profile
+                </label>
+                {includePartner ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <label className="text-sm">
+                      Partner Name
+                      <input
+                        type="text"
+                        value={partner.name}
+                        onChange={(e) => setPartner((prev) => ({ ...prev, name: e.target.value }))}
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="text-sm">
+                      Partner Age
+                      <input
+                        type="number"
+                        min={0}
+                        max={150}
+                        step={1}
+                        value={displayNumber("partnerAge", partner.age)}
+                        onFocus={() => beginNumberDraft("partnerAge", partner.age)}
+                        onChange={(e) => updateNumberDraft("partnerAge", e.target.value)}
+                        onBlur={() =>
+                          commitNumberDraft(
+                            "partnerAge",
+                            (n) => setPartner((prev) => ({ ...prev, age: n })),
+                            { min: 0, max: 150, round: true }
+                          )
+                        }
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="text-sm">
+                      Partner Income (CAD)
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={displayNumber("partnerIncomeCad", partner.incomeCad)}
+                        onFocus={() => beginNumberDraft("partnerIncomeCad", partner.incomeCad)}
+                        onChange={(e) => updateNumberDraft("partnerIncomeCad", e.target.value)}
+                        onBlur={() =>
+                          commitNumberDraft(
+                            "partnerIncomeCad",
+                            (n) => setPartner((prev) => ({ ...prev, incomeCad: n })),
+                            { min: 0 }
+                          )
+                        }
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="text-sm">
+                      Partner Annual Surplus (CAD)
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={displayNumber("partnerAnnualSurplusCad", partner.annualSurplusCad)}
+                        onFocus={() => beginNumberDraft("partnerAnnualSurplusCad", partner.annualSurplusCad)}
+                        onChange={(e) => updateNumberDraft("partnerAnnualSurplusCad", e.target.value)}
+                        onBlur={() =>
+                          commitNumberDraft(
+                            "partnerAnnualSurplusCad",
+                            (n) => setPartner((prev) => ({ ...prev, annualSurplusCad: n })),
+                            { min: 0 }
+                          )
+                        }
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="text-sm">
+                      Partner Living Spend (CAD)
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={displayNumber("partnerAnnualLivingSpendCad", partner.annualLivingSpendCad)}
+                        onFocus={() => beginNumberDraft("partnerAnnualLivingSpendCad", partner.annualLivingSpendCad)}
+                        onChange={(e) => updateNumberDraft("partnerAnnualLivingSpendCad", e.target.value)}
+                        onBlur={() =>
+                          commitNumberDraft(
+                            "partnerAnnualLivingSpendCad",
+                            (n) => setPartner((prev) => ({ ...prev, annualLivingSpendCad: n })),
+                            { min: 0 }
+                          )
+                        }
+                        className={inputClass}
+                      />
+                    </label>
+                  </div>
+                ) : null}
               </div>
               <div className={cx("rounded-xl border p-3 text-sm glass-panel-soft", themed("border-emerald-300/60 text-emerald-800", "border-emerald-300/25 text-emerald-200"))}>
-                Auto tax bracket match: <span className="font-semibold">{pct(bracketRate)}</span> marginal rate based on entered income.
+                Approx. combined federal + {PROVINCE_OPTIONS.find((p) => p.code === input.province)?.label} marginal rate:{" "}
+                <span className="font-semibold">{pct(bracketRate)}</span> from{" "}
+                {includePartner ? "household taxable income" : "taxable income"}.
+                {includePartner ? (
+                  <span className="ml-1">
+                    Household income: <span className="font-semibold">${fmt(householdIncomeCad)}</span> and household surplus:{" "}
+                    <span className="font-semibold">${fmt(householdSurplusCad)}</span>.
+                  </span>
+                ) : null}
               </div>
             </div>
 
@@ -577,7 +945,8 @@ export default function StrategyPage() {
                       <span>${fmt(r.netOneYearCad)}</span>
                     </div>
                     <div className={cx("text-xs mt-1", themed("text-slate-600", "text-slate-300"))}>
-                      Tax saved: ${fmt(r.taxSavedCad)} | Grants: ${fmt(r.grantCad)} | Tax drag: ${fmt(r.taxedGrowthDragCad)}
+                      Tax saved / shelter: ${fmt(r.taxSavedCad)} | Grants: ${fmt(r.grantCad)} | Est. tax on existing bank growth: $
+                      {fmt(r.taxedGrowthDragCad)}
                     </div>
                   </div>
                 ))}
@@ -589,8 +958,16 @@ export default function StrategyPage() {
             <div className={cardClass}>
               <h2 className="text-lg font-semibold mb-3">Breakevens</h2>
               <ul className={cx("space-y-2 text-sm", themed("text-slate-700", "text-slate-200"))}>
-                <li>Bank pre-tax return needed to match 5% TFSA return at your bracket: <span className="font-semibold">{pct(breakevens.bankNeededReturn)}</span></li>
-                <li>RRSP/FHSA vs TFSA breakeven future withdrawal tax rate: <span className="font-semibold">{pct(breakevens.rrspVsTfsaWithdrawalRate)}</span></li>
+                <li>
+                  Non-registered pre-tax return needed to match a{" "}
+                  <span className="font-semibold">{pct(breakevens.tfsaExpectedReturn)}</span> TFSA benchmark (dividend + optional price return; ordinary-income marginal proxy):{" "}
+                  <span className="font-semibold">{pct(breakevens.bankNeededReturn)}</span>
+                </li>
+                <li>
+                  RRSP/FHSA vs TFSA (rough): compare your expected retirement withdrawal rate{" "}
+                  <span className="font-semibold">{pct(breakevens.rrspVsTfsaWithdrawalRate)}</span> (from profile) to current marginal{" "}
+                  <span className="font-semibold">{pct(bracketRate)}</span> — not a full RRSP/FHSA optimizer.
+                </li>
                 <li>Sweep minus TFSA one-year edge: <span className="font-semibold">${fmt(breakevens.sweepVsTfsaDelta)}</span></li>
               </ul>
             </div>
