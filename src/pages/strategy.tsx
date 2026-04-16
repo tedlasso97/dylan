@@ -7,8 +7,8 @@ const cx = (...classes: (string | false | null | undefined)[]) => classes.filter
 type AccountType = "RRIF" | "LIF" | "RRSP" | "FHSA" | "TFSA" | "RESP" | "BANK";
 type ProvinceCode = "AB" | "BC" | "MB" | "NB" | "NL" | "NS" | "ON" | "PE" | "QC" | "SK";
 
-/** Upper bound for TFSA cash dividend yield in UI (30%). */
-const MAX_TFSA_DIVIDEND_YIELD = 0.3;
+/** Upper bound for TFSA cash dividend yield in UI (15% — covers 10–12% band with headroom). */
+const MAX_TFSA_DIVIDEND_YIELD = 0.15;
 
 interface AccountInput {
   id: string;
@@ -220,7 +220,7 @@ const sanitizeStrategyInput = (raw: Partial<StrategyInput> | null | undefined): 
   incomeCad: Math.max(0, toFiniteNumber(raw?.incomeCad, 145000)),
   annualSurplusCad: Math.max(0, toFiniteNumber(raw?.annualSurplusCad, 40000)),
   annualLivingSpendCad: Math.max(0, toFiniteNumber(raw?.annualLivingSpendCad, 90000)),
-  assumedTfsaDividendYield: clamp(toFiniteNumber(raw?.assumedTfsaDividendYield, 0.1), 0, MAX_TFSA_DIVIDEND_YIELD),
+  assumedTfsaDividendYield: clamp(toFiniteNumber(raw?.assumedTfsaDividendYield, 0.11), 0, MAX_TFSA_DIVIDEND_YIELD),
   assumedNonRegCapitalAppreciation: clamp(toFiniteNumber(raw?.assumedNonRegCapitalAppreciation, 0), 0, 1),
   tfsaRoomCad: Math.max(0, toFiniteNumber(raw?.tfsaRoomCad, 7000)),
   rrspRoomCad: Math.max(0, toFiniteNumber(raw?.rrspRoomCad, 22000)),
@@ -251,6 +251,11 @@ const sanitizeAccounts = (raw: unknown): AccountInput[] => {
   });
 };
 
+const defaultReturnPctForType = (type: AccountType): number => {
+  if (type === "BANK") return 3;
+  return 5;
+};
+
 export default function StrategyPage() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [input, setInput] = useState<StrategyInput>({
@@ -259,7 +264,7 @@ export default function StrategyPage() {
     incomeCad: 145000,
     annualSurplusCad: 40000,
     annualLivingSpendCad: 90000,
-    assumedTfsaDividendYield: 0.1,
+    assumedTfsaDividendYield: 0.11,
     assumedNonRegCapitalAppreciation: 0,
     tfsaRoomCad: 7000,
     rrspRoomCad: 22000,
@@ -347,6 +352,15 @@ export default function StrategyPage() {
     });
   };
   const displayNumber = (key: string, value: number) => (key in draftValues ? draftValues[key] : String(value));
+  const balanceForType = (type: AccountType) =>
+    accounts.filter((a) => a.type === type).reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const setBalanceForType = (type: AccountType, balance: number) => {
+    setAccounts((prev) => {
+      const idx = prev.findIndex((a) => a.type === type);
+      if (idx === -1) return [...prev, { id: uid(), type, balance, annualReturnPct: defaultReturnPctForType(type) }];
+      return prev.map((a, i) => (i === idx ? { ...a, balance } : a));
+    });
+  };
   const cardClass = cx(
     "rounded-2xl border p-5 glass-panel",
     themed("border-white/60 text-slate-800", "border-white/10 text-slate-100")
@@ -371,6 +385,73 @@ export default function StrategyPage() {
       .reduce((s, a) => s + growthOn(Number(a.balance) || 0, Number(a.annualReturnPct) || 0), 0);
     return { totalBalance, projectedGrowth, nonRegisteredGrowth };
   }, [accounts]);
+
+  const tfsaBalance = useMemo(
+    () => accounts.filter((a) => a.type === "TFSA").reduce((s, a) => s + (Number(a.balance) || 0), 0),
+    [accounts]
+  );
+
+  const annualTfsaDividendCashCad = useMemo(
+    () => Math.max(0, tfsaBalance * input.assumedTfsaDividendYield),
+    [input.assumedTfsaDividendYield, tfsaBalance]
+  );
+
+  const dividendReinvestVsRegistered = useMemo(() => {
+    const div = annualTfsaDividendCashCad;
+    let remaining = div;
+    let rrspFromDiv = 0;
+    let fhsaFromDiv = 0;
+    let respFromDiv = 0;
+    let grant = 0;
+
+    if (remaining > 0 && sweep.resp) {
+      const alloc = Math.min(remaining, input.respRoomCad);
+      if (alloc > 0) {
+        respFromDiv = alloc;
+        remaining -= alloc;
+        const rawGrant = alloc * 0.2;
+        grant += Math.min(rawGrant, 500);
+      }
+    }
+    if (remaining > 0 && sweep.rrsp) {
+      const alloc = Math.min(remaining, input.rrspRoomCad);
+      rrspFromDiv = alloc;
+      remaining -= alloc;
+    }
+    if (remaining > 0 && sweep.fhsa) {
+      const alloc = Math.min(remaining, input.fhsaRoomCad);
+      fhsaFromDiv = alloc;
+      remaining -= alloc;
+    }
+
+    const taxRefundFromSweep = (rrspFromDiv + fhsaFromDiv) * bracketRate;
+    const registeredScore = taxRefundFromSweep + grant;
+    const reinvestScore = div * input.assumedTfsaDividendYield;
+    const pick: "reinvest" | "sweep" =
+      div <= 0 ? "reinvest" : registeredScore >= reinvestScore ? "sweep" : "reinvest";
+
+    return {
+      div,
+      rrspFromDiv,
+      fhsaFromDiv,
+      respFromDiv,
+      grant,
+      taxRefundFromSweep,
+      registeredScore,
+      reinvestScore,
+      pick,
+    };
+  }, [
+    annualTfsaDividendCashCad,
+    bracketRate,
+    input.assumedTfsaDividendYield,
+    input.fhsaRoomCad,
+    input.rrspRoomCad,
+    input.respRoomCad,
+    sweep.fhsa,
+    sweep.resp,
+    sweep.rrsp,
+  ]);
 
   const strategyResults = useMemo<StrategyResult[]>(() => {
     const surplus = Math.max(0, householdSurplusCad);
@@ -498,7 +579,7 @@ export default function StrategyPage() {
             <div>
               <h1 className="text-3xl font-bold">Strategy Lab</h1>
               <p className={softTextClass}>
-                Canadian planning view: compare surplus deployment (sweep vs TFSA) using approximate marginal rates. Not tax advice.
+                Canadian planning heuristic: compare reinvesting TFSA dividends vs sweeping them into registered accounts, using age, income, balances, and approximate marginal rates. Not tax advice.
               </p>
             </div>
             <button
@@ -511,8 +592,44 @@ export default function StrategyPage() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            <div className={cx(cardClass, "xl:col-span-2 space-y-4")}>
+          <div className={cx(cardClass, "space-y-3")}>
+            <h2 className="text-lg font-semibold">TFSA dividends: reinvest vs registered sweep</h2>
+            <p className={cx("text-sm", themed("text-slate-600", "text-slate-300"))}>
+              Estimated annual cash dividends: <span className="font-semibold">${fmt(dividendReinvestVsRegistered.div)}</span> from TFSA balance{" "}
+              <span className="font-semibold">${fmt(tfsaBalance)}</span> at <span className="font-semibold">{pct(input.assumedTfsaDividendYield)}</span>. Rule of thumb
+              compares one-year registered refund (RRSP/FHSA/RESP sweep toggles) vs keeping dividends compounding inside the TFSA (proxy score).
+            </p>
+            <div
+              className={cx(
+                "rounded-xl border p-3 text-sm glass-panel-soft",
+                themed(
+                  dividendReinvestVsRegistered.pick === "sweep" ? "border-cyan-300/60 text-slate-800" : "border-emerald-300/60 text-slate-800",
+                  dividendReinvestVsRegistered.pick === "sweep" ? "border-cyan-300/25 text-cyan-100" : "border-emerald-300/25 text-emerald-100"
+                )
+              )}
+            >
+              <div className="font-semibold">
+                {dividendReinvestVsRegistered.pick === "sweep" ? "Lean: sweep dividends to registered (this year)" : "Lean: reinvest dividends inside TFSA (this year)"}
+              </div>
+              <div className={cx("mt-2 space-y-1", themed("text-slate-700", "text-slate-200"))}>
+                <div>
+                  Registered sweep score (refund + RESP grant):{" "}
+                  <span className="font-semibold">${fmt(dividendReinvestVsRegistered.registeredScore)}</span>
+                </div>
+                <div>
+                  Reinvest proxy (tax-free dividend-on-dividend compounding):{" "}
+                  <span className="font-semibold">${fmt(dividendReinvestVsRegistered.reinvestScore)}</span>
+                </div>
+                <div className={cx("text-xs", themed("text-slate-600", "text-slate-400"))}>
+                  Sweep allocation from dividends: RESP ${fmt(dividendReinvestVsRegistered.respFromDiv)} | RRSP ${fmt(dividendReinvestVsRegistered.rrspFromDiv)} | FHSA $
+                  {fmt(dividendReinvestVsRegistered.fhsaFromDiv)}. RESP grant (simplified): ${fmt(dividendReinvestVsRegistered.grant)}.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6">
+            <div className={cx(cardClass, "space-y-4")}>
               <h2 className="text-lg font-semibold flex items-center gap-2">
                 <FiTarget className="h-5 w-5 rounded-md p-1 glass-panel-soft border border-white/20" />
                 Client Profile
@@ -539,20 +656,6 @@ export default function StrategyPage() {
                   />
                 </label>
                 <label className="text-sm">
-                  Province
-                  <select
-                    value={input.province}
-                    onChange={(e) => setInput((prev) => ({ ...prev, province: e.target.value as ProvinceCode }))}
-                    className={inputClass}
-                  >
-                    {PROVINCE_OPTIONS.map((province) => (
-                      <option key={province.code} value={province.code}>
-                        {province.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-sm">
                   Income (CAD)
                   <input
                     type="number"
@@ -567,87 +670,8 @@ export default function StrategyPage() {
                     className={inputClass}
                   />
                 </label>
-                <label className="text-sm">
-                  Annual Surplus (CAD)
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={displayNumber("annualSurplusCad", input.annualSurplusCad)}
-                    onFocus={() => beginNumberDraft("annualSurplusCad", input.annualSurplusCad)}
-                    onChange={(e) => updateNumberDraft("annualSurplusCad", e.target.value)}
-                    onBlur={() =>
-                      commitNumberDraft(
-                        "annualSurplusCad",
-                        (n) => setInput((prev) => ({ ...prev, annualSurplusCad: n })),
-                        { min: 0 }
-                      )
-                    }
-                    className={inputClass}
-                  />
-                </label>
-                <label className="text-sm">
-                  Annual Living Spend (CAD)
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={displayNumber("annualLivingSpendCad", input.annualLivingSpendCad)}
-                    onFocus={() => beginNumberDraft("annualLivingSpendCad", input.annualLivingSpendCad)}
-                    onChange={(e) => updateNumberDraft("annualLivingSpendCad", e.target.value)}
-                    onBlur={() =>
-                      commitNumberDraft(
-                        "annualLivingSpendCad",
-                        (n) => setInput((prev) => ({ ...prev, annualLivingSpendCad: n })),
-                        { min: 0 }
-                      )
-                    }
-                    className={inputClass}
-                  />
-                </label>
-                <label className="text-sm">
-                  Expected Retirement Tax Rate
-                  <input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step="0.01"
-                    value={displayNumber("expectedTaxRateInRetirement", input.expectedTaxRateInRetirement)}
-                    onFocus={() => beginNumberDraft("expectedTaxRateInRetirement", input.expectedTaxRateInRetirement)}
-                    onChange={(e) => updateNumberDraft("expectedTaxRateInRetirement", e.target.value)}
-                    onBlur={() =>
-                      commitNumberDraft(
-                        "expectedTaxRateInRetirement",
-                        (n) => setInput((prev) => ({ ...prev, expectedTaxRateInRetirement: n })),
-                        { min: 0, max: 1 }
-                      )
-                    }
-                    className={inputClass}
-                  />
-                </label>
-                <label className="text-sm">
-                  Non-reg price return (optional)
-                  <input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step="0.01"
-                    value={displayNumber("assumedNonRegCapitalAppreciation", input.assumedNonRegCapitalAppreciation)}
-                    onFocus={() => beginNumberDraft("assumedNonRegCapitalAppreciation", input.assumedNonRegCapitalAppreciation)}
-                    onChange={(e) => updateNumberDraft("assumedNonRegCapitalAppreciation", e.target.value)}
-                    onBlur={() =>
-                      commitNumberDraft(
-                        "assumedNonRegCapitalAppreciation",
-                        (n) => setInput((prev) => ({ ...prev, assumedNonRegCapitalAppreciation: n })),
-                        { min: 0, max: 1 }
-                      )
-                    }
-                    className={inputClass}
-                  />
-                </label>
-              </div>
-              <div className="rounded-xl border border-white/10 p-3 glass-panel-soft space-y-2">
-                <div className="text-sm font-medium">TFSA cash dividend yield (only)</div>
+                <div className="md:col-span-3 rounded-xl border border-white/10 p-3 glass-panel-soft space-y-2">
+                <div className="text-sm font-medium">TFSA cash dividend yield (typical 10–12%)</div>
                 <input
                   type="range"
                   min={0}
@@ -686,108 +710,208 @@ export default function StrategyPage() {
                     Current: <span className="font-semibold">{pct(input.assumedTfsaDividendYield)}</span> (max {pct(MAX_TFSA_DIVIDEND_YIELD)})
                   </span>
                 </div>
+                </div>
               </div>
-              <div className="space-y-3 rounded-xl border border-white/10 p-3 glass-panel-soft">
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={includePartner}
-                    onChange={(e) => setIncludePartner(e.target.checked)}
-                    className="h-4 w-4 accent-cyan-400"
-                  />
-                  Add spouse/partner profile
-                </label>
-                {includePartner ? (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <label className="text-sm">
-                      Partner Name
-                      <input
-                        type="text"
-                        value={partner.name}
-                        onChange={(e) => setPartner((prev) => ({ ...prev, name: e.target.value }))}
-                        className={inputClass}
-                      />
-                    </label>
-                    <label className="text-sm">
-                      Partner Age
-                      <input
-                        type="number"
-                        min={0}
-                        max={150}
-                        step={1}
-                        value={displayNumber("partnerAge", partner.age)}
-                        onFocus={() => beginNumberDraft("partnerAge", partner.age)}
-                        onChange={(e) => updateNumberDraft("partnerAge", e.target.value)}
-                        onBlur={() =>
-                          commitNumberDraft(
-                            "partnerAge",
-                            (n) => setPartner((prev) => ({ ...prev, age: n })),
-                            { min: 0, max: 150, round: true }
-                          )
-                        }
-                        className={inputClass}
-                      />
-                    </label>
-                    <label className="text-sm">
-                      Partner Income (CAD)
-                      <input
-                        type="number"
-                        min={0}
-                        step={1}
-                        value={displayNumber("partnerIncomeCad", partner.incomeCad)}
-                        onFocus={() => beginNumberDraft("partnerIncomeCad", partner.incomeCad)}
-                        onChange={(e) => updateNumberDraft("partnerIncomeCad", e.target.value)}
-                        onBlur={() =>
-                          commitNumberDraft(
-                            "partnerIncomeCad",
-                            (n) => setPartner((prev) => ({ ...prev, incomeCad: n })),
-                            { min: 0 }
-                          )
-                        }
-                        className={inputClass}
-                      />
-                    </label>
-                    <label className="text-sm">
-                      Partner Annual Surplus (CAD)
-                      <input
-                        type="number"
-                        min={0}
-                        step={1}
-                        value={displayNumber("partnerAnnualSurplusCad", partner.annualSurplusCad)}
-                        onFocus={() => beginNumberDraft("partnerAnnualSurplusCad", partner.annualSurplusCad)}
-                        onChange={(e) => updateNumberDraft("partnerAnnualSurplusCad", e.target.value)}
-                        onBlur={() =>
-                          commitNumberDraft(
-                            "partnerAnnualSurplusCad",
-                            (n) => setPartner((prev) => ({ ...prev, annualSurplusCad: n })),
-                            { min: 0 }
-                          )
-                        }
-                        className={inputClass}
-                      />
-                    </label>
-                    <label className="text-sm">
-                      Partner Living Spend (CAD)
-                      <input
-                        type="number"
-                        min={0}
-                        step={1}
-                        value={displayNumber("partnerAnnualLivingSpendCad", partner.annualLivingSpendCad)}
-                        onFocus={() => beginNumberDraft("partnerAnnualLivingSpendCad", partner.annualLivingSpendCad)}
-                        onChange={(e) => updateNumberDraft("partnerAnnualLivingSpendCad", e.target.value)}
-                        onBlur={() =>
-                          commitNumberDraft(
-                            "partnerAnnualLivingSpendCad",
-                            (n) => setPartner((prev) => ({ ...prev, annualLivingSpendCad: n })),
-                            { min: 0 }
-                          )
-                        }
-                        className={inputClass}
-                      />
-                    </label>
-                  </div>
-                ) : null}
-              </div>
+              <details className="rounded-xl border border-white/10 p-3 glass-panel-soft">
+                <summary className={cx("cursor-pointer text-sm font-medium", themed("text-slate-800", "text-slate-100"))}>
+                  Advanced inputs (province, surplus, partner, retirement rate…)
+                </summary>
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <label className="text-sm">
+                    Province
+                    <select
+                      value={input.province}
+                      onChange={(e) => setInput((prev) => ({ ...prev, province: e.target.value as ProvinceCode }))}
+                      className={inputClass}
+                    >
+                      {PROVINCE_OPTIONS.map((province) => (
+                        <option key={province.code} value={province.code}>
+                          {province.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-sm">
+                    Annual Surplus (CAD)
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={displayNumber("annualSurplusCad", input.annualSurplusCad)}
+                      onFocus={() => beginNumberDraft("annualSurplusCad", input.annualSurplusCad)}
+                      onChange={(e) => updateNumberDraft("annualSurplusCad", e.target.value)}
+                      onBlur={() =>
+                        commitNumberDraft(
+                          "annualSurplusCad",
+                          (n) => setInput((prev) => ({ ...prev, annualSurplusCad: n })),
+                          { min: 0 }
+                        )
+                      }
+                      className={inputClass}
+                    />
+                  </label>
+                  <label className="text-sm">
+                    Annual Living Spend (CAD)
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={displayNumber("annualLivingSpendCad", input.annualLivingSpendCad)}
+                      onFocus={() => beginNumberDraft("annualLivingSpendCad", input.annualLivingSpendCad)}
+                      onChange={(e) => updateNumberDraft("annualLivingSpendCad", e.target.value)}
+                      onBlur={() =>
+                        commitNumberDraft(
+                          "annualLivingSpendCad",
+                          (n) => setInput((prev) => ({ ...prev, annualLivingSpendCad: n })),
+                          { min: 0 }
+                        )
+                      }
+                      className={inputClass}
+                    />
+                  </label>
+                  <label className="text-sm">
+                    Expected Retirement Tax Rate
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step="0.01"
+                      value={displayNumber("expectedTaxRateInRetirement", input.expectedTaxRateInRetirement)}
+                      onFocus={() => beginNumberDraft("expectedTaxRateInRetirement", input.expectedTaxRateInRetirement)}
+                      onChange={(e) => updateNumberDraft("expectedTaxRateInRetirement", e.target.value)}
+                      onBlur={() =>
+                        commitNumberDraft(
+                          "expectedTaxRateInRetirement",
+                          (n) => setInput((prev) => ({ ...prev, expectedTaxRateInRetirement: n })),
+                          { min: 0, max: 1 }
+                        )
+                      }
+                      className={inputClass}
+                    />
+                  </label>
+                  <label className="text-sm md:col-span-2">
+                    Non-reg price return if outside TFSA (optional)
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step="0.01"
+                      value={displayNumber("assumedNonRegCapitalAppreciation", input.assumedNonRegCapitalAppreciation)}
+                      onFocus={() => beginNumberDraft("assumedNonRegCapitalAppreciation", input.assumedNonRegCapitalAppreciation)}
+                      onChange={(e) => updateNumberDraft("assumedNonRegCapitalAppreciation", e.target.value)}
+                      onBlur={() =>
+                        commitNumberDraft(
+                          "assumedNonRegCapitalAppreciation",
+                          (n) => setInput((prev) => ({ ...prev, assumedNonRegCapitalAppreciation: n })),
+                          { min: 0, max: 1 }
+                        )
+                      }
+                      className={inputClass}
+                    />
+                  </label>
+                </div>
+                <div className="mt-3 space-y-3 rounded-xl border border-white/10 p-3 glass-panel-soft">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={includePartner}
+                      onChange={(e) => setIncludePartner(e.target.checked)}
+                      className="h-4 w-4 accent-cyan-400"
+                    />
+                    Add spouse/partner profile
+                  </label>
+                  {includePartner ? (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <label className="text-sm">
+                        Partner Name
+                        <input
+                          type="text"
+                          value={partner.name}
+                          onChange={(e) => setPartner((prev) => ({ ...prev, name: e.target.value }))}
+                          className={inputClass}
+                        />
+                      </label>
+                      <label className="text-sm">
+                        Partner Age
+                        <input
+                          type="number"
+                          min={0}
+                          max={150}
+                          step={1}
+                          value={displayNumber("partnerAge", partner.age)}
+                          onFocus={() => beginNumberDraft("partnerAge", partner.age)}
+                          onChange={(e) => updateNumberDraft("partnerAge", e.target.value)}
+                          onBlur={() =>
+                            commitNumberDraft(
+                              "partnerAge",
+                              (n) => setPartner((prev) => ({ ...prev, age: n })),
+                              { min: 0, max: 150, round: true }
+                            )
+                          }
+                          className={inputClass}
+                        />
+                      </label>
+                      <label className="text-sm">
+                        Partner Income (CAD)
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={displayNumber("partnerIncomeCad", partner.incomeCad)}
+                          onFocus={() => beginNumberDraft("partnerIncomeCad", partner.incomeCad)}
+                          onChange={(e) => updateNumberDraft("partnerIncomeCad", e.target.value)}
+                          onBlur={() =>
+                            commitNumberDraft(
+                              "partnerIncomeCad",
+                              (n) => setPartner((prev) => ({ ...prev, incomeCad: n })),
+                              { min: 0 }
+                            )
+                          }
+                          className={inputClass}
+                        />
+                      </label>
+                      <label className="text-sm">
+                        Partner Annual Surplus (CAD)
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={displayNumber("partnerAnnualSurplusCad", partner.annualSurplusCad)}
+                          onFocus={() => beginNumberDraft("partnerAnnualSurplusCad", partner.annualSurplusCad)}
+                          onChange={(e) => updateNumberDraft("partnerAnnualSurplusCad", e.target.value)}
+                          onBlur={() =>
+                            commitNumberDraft(
+                              "partnerAnnualSurplusCad",
+                              (n) => setPartner((prev) => ({ ...prev, annualSurplusCad: n })),
+                              { min: 0 }
+                            )
+                          }
+                          className={inputClass}
+                        />
+                      </label>
+                      <label className="text-sm md:col-span-2">
+                        Partner Living Spend (CAD)
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={displayNumber("partnerAnnualLivingSpendCad", partner.annualLivingSpendCad)}
+                          onFocus={() => beginNumberDraft("partnerAnnualLivingSpendCad", partner.annualLivingSpendCad)}
+                          onChange={(e) => updateNumberDraft("partnerAnnualLivingSpendCad", e.target.value)}
+                          onBlur={() =>
+                            commitNumberDraft(
+                              "partnerAnnualLivingSpendCad",
+                              (n) => setPartner((prev) => ({ ...prev, annualLivingSpendCad: n })),
+                              { min: 0 }
+                            )
+                          }
+                          className={inputClass}
+                        />
+                      </label>
+                    </div>
+                  ) : null}
+                </div>
+              </details>
               <div className={cx("rounded-xl border p-3 text-sm glass-panel-soft", themed("border-emerald-300/60 text-emerald-800", "border-emerald-300/25 text-emerald-200"))}>
                 Approx. combined federal + {PROVINCE_OPTIONS.find((p) => p.code === input.province)?.label} marginal rate:{" "}
                 <span className="font-semibold">{pct(bracketRate)}</span> from{" "}
@@ -800,28 +924,35 @@ export default function StrategyPage() {
                 ) : null}
               </div>
             </div>
+          </div>
 
-            <div className={cx(cardClass, "space-y-4")}>
-              <h2 className="text-lg font-semibold">Contribution Room</h2>
-              {[
-                { key: "tfsaRoomCad", label: "TFSA room" },
-                { key: "rrspRoomCad", label: "RRSP room" },
-                { key: "fhsaRoomCad", label: "FHSA room" },
-                { key: "respRoomCad", label: "RESP room" },
-              ].map((f) => (
-                <label className="text-sm block" key={f.key}>
-                  {f.label} (CAD)
+          <div className={cardClass}>
+            <h2 className="text-lg font-semibold mb-2">Account balances (core)</h2>
+            <p className={cx("text-sm mb-4", themed("text-slate-600", "text-slate-300"))}>
+              Enter current balances for the main buckets. Dividend cashflow uses the <span className="font-semibold">TFSA</span> balance × yield.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {(
+                [
+                  { type: "TFSA" as const, label: "TFSA balance (CAD)" },
+                  { type: "RRSP" as const, label: "RRSP balance (CAD)" },
+                  { type: "RRIF" as const, label: "RRIF / LIF balance (CAD)" },
+                  { type: "BANK" as const, label: "Non-registered cash / savings (CAD)" },
+                ] as const
+              ).map((row) => (
+                <label className="text-sm" key={row.type}>
+                  {row.label}
                   <input
                     type="number"
                     min={0}
-                    step={1}
-                    value={displayNumber(f.key, input[f.key as keyof StrategyInput] as number)}
-                    onFocus={() => beginNumberDraft(f.key, input[f.key as keyof StrategyInput] as number)}
-                    onChange={(e) => updateNumberDraft(f.key, e.target.value)}
+                    step="1"
+                    value={displayNumber(`balance-type-${row.type}`, balanceForType(row.type))}
+                    onFocus={() => beginNumberDraft(`balance-type-${row.type}`, balanceForType(row.type))}
+                    onChange={(e) => updateNumberDraft(`balance-type-${row.type}`, e.target.value)}
                     onBlur={() =>
                       commitNumberDraft(
-                        f.key,
-                        (n) => setInput((prev) => ({ ...prev, [f.key]: n })),
+                        `balance-type-${row.type}`,
+                        (n) => setBalanceForType(row.type, n),
                         { min: 0 }
                       )
                     }
@@ -830,72 +961,103 @@ export default function StrategyPage() {
                 </label>
               ))}
             </div>
-          </div>
-
-          <div className={cardClass}>
-            <h2 className="text-lg font-semibold mb-4">Accounts (RRIF / LIF / etc.)</h2>
-            <div className="space-y-3">
-              {accounts.map((a, index) => (
-                <div key={a.id} className="grid grid-cols-12 gap-3">
-                  <select value={a.type} onChange={(e) => {
-                    const next = [...accounts];
-                    next[index] = { ...next[index], type: e.target.value as AccountType };
-                    setAccounts(next);
-                  }} className={cx("col-span-3", inputClass)}>
-                    {["RRIF", "LIF", "RRSP", "FHSA", "TFSA", "RESP", "BANK"].map((t) => (
-                      <option key={t} value={t}>{t}</option>
-                    ))}
-                  </select>
-                  <input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    placeholder="Balance"
-                    value={displayNumber(`balance-${a.id}`, a.balance)}
-                    onFocus={() => beginNumberDraft(`balance-${a.id}`, a.balance)}
-                    onChange={(e) => updateNumberDraft(`balance-${a.id}`, e.target.value)}
-                    onBlur={() =>
-                      commitNumberDraft(
-                        `balance-${a.id}`,
-                        (n) =>
-                          setAccounts((prev) =>
-                            prev.map((row) => (row.id === a.id ? { ...row, balance: n } : row))
-                          ),
-                        { min: 0 }
-                      )
-                    }
-                    className={cx("col-span-4", inputClass)}
-                  />
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="Return %"
-                    value={displayNumber(`return-${a.id}`, a.annualReturnPct)}
-                    onFocus={() => beginNumberDraft(`return-${a.id}`, a.annualReturnPct)}
-                    onChange={(e) => updateNumberDraft(`return-${a.id}`, e.target.value)}
-                    onBlur={() =>
-                      commitNumberDraft(
-                        `return-${a.id}`,
-                        (n) =>
-                          setAccounts((prev) =>
-                            prev.map((row) => (row.id === a.id ? { ...row, annualReturnPct: n } : row))
-                          ),
-                        { min: -100, max: 200 }
-                      )
-                    }
-                    className={cx("col-span-4", inputClass)}
-                  />
-                  <button onClick={() => setAccounts(accounts.filter((row) => row.id !== a.id))} className={cx("col-span-1 rounded-xl border glass-panel-soft", themed("border-rose-300/70 text-rose-600", "border-rose-300/20 text-rose-200"))}>x</button>
+            <details className="mt-4 rounded-xl border border-white/10 p-3 glass-panel-soft">
+              <summary className={cx("cursor-pointer text-sm font-medium", themed("text-slate-800", "text-slate-100"))}>
+                Advanced: contribution room, per-account return %, extra accounts…
+              </summary>
+              <div className="mt-3 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {[
+                    { key: "tfsaRoomCad", label: "TFSA room" },
+                    { key: "rrspRoomCad", label: "RRSP room" },
+                    { key: "fhsaRoomCad", label: "FHSA room" },
+                    { key: "respRoomCad", label: "RESP room" },
+                  ].map((f) => (
+                    <label className="text-sm block" key={f.key}>
+                      {f.label} (CAD)
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={displayNumber(f.key, input[f.key as keyof StrategyInput] as number)}
+                        onFocus={() => beginNumberDraft(f.key, input[f.key as keyof StrategyInput] as number)}
+                        onChange={(e) => updateNumberDraft(f.key, e.target.value)}
+                        onBlur={() =>
+                          commitNumberDraft(
+                            f.key,
+                            (n) => setInput((prev) => ({ ...prev, [f.key]: n })),
+                            { min: 0 }
+                          )
+                        }
+                        className={inputClass}
+                      />
+                    </label>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <button onClick={() => setAccounts([...accounts, { id: uid(), type: "BANK", balance: 0, annualReturnPct: 3 }])} className="mt-4 rounded-xl glass-button px-4 py-2 text-sm font-medium">
-              Add Account
-            </button>
-            <div className={cx("mt-4 text-sm", themed("text-slate-600", "text-slate-300"))}>
-              Total tracked balances: <span className="font-semibold">${fmt(accountSummary.totalBalance)}</span> | projected one-year growth:{" "}
-              <span className="font-semibold">${fmt(accountSummary.projectedGrowth)}</span>
-            </div>
+                <div className="space-y-3">
+                  {accounts.map((a, index) => (
+                    <div key={a.id} className="grid grid-cols-12 gap-3">
+                      <select value={a.type} onChange={(e) => {
+                        const next = [...accounts];
+                        next[index] = { ...next[index], type: e.target.value as AccountType };
+                        setAccounts(next);
+                      }} className={cx("col-span-3", inputClass)}>
+                        {["RRIF", "LIF", "RRSP", "FHSA", "TFSA", "RESP", "BANK"].map((t) => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        placeholder="Balance"
+                        value={displayNumber(`balance-${a.id}`, a.balance)}
+                        onFocus={() => beginNumberDraft(`balance-${a.id}`, a.balance)}
+                        onChange={(e) => updateNumberDraft(`balance-${a.id}`, e.target.value)}
+                        onBlur={() =>
+                          commitNumberDraft(
+                            `balance-${a.id}`,
+                            (n) =>
+                              setAccounts((prev) =>
+                                prev.map((row) => (row.id === a.id ? { ...row, balance: n } : row))
+                              ),
+                            { min: 0 }
+                          )
+                        }
+                        className={cx("col-span-4", inputClass)}
+                      />
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="Return %"
+                        value={displayNumber(`return-${a.id}`, a.annualReturnPct)}
+                        onFocus={() => beginNumberDraft(`return-${a.id}`, a.annualReturnPct)}
+                        onChange={(e) => updateNumberDraft(`return-${a.id}`, e.target.value)}
+                        onBlur={() =>
+                          commitNumberDraft(
+                            `return-${a.id}`,
+                            (n) =>
+                              setAccounts((prev) =>
+                                prev.map((row) => (row.id === a.id ? { ...row, annualReturnPct: n } : row))
+                              ),
+                            { min: -100, max: 200 }
+                          )
+                        }
+                        className={cx("col-span-4", inputClass)}
+                      />
+                      <button onClick={() => setAccounts(accounts.filter((row) => row.id !== a.id))} className={cx("col-span-1 rounded-xl border glass-panel-soft", themed("border-rose-300/70 text-rose-600", "border-rose-300/20 text-rose-200"))}>x</button>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => setAccounts([...accounts, { id: uid(), type: "BANK", balance: 0, annualReturnPct: 3 }])} className="rounded-xl glass-button px-4 py-2 text-sm font-medium">
+                  Add Account Row
+                </button>
+                <div className={cx("text-sm", themed("text-slate-600", "text-slate-300"))}>
+                  Total tracked balances: <span className="font-semibold">${fmt(accountSummary.totalBalance)}</span> | projected one-year growth:{" "}
+                  <span className="font-semibold">${fmt(accountSummary.projectedGrowth)}</span>
+                </div>
+              </div>
+            </details>
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
