@@ -17,12 +17,7 @@ interface AccountInput {
   annualReturnPct: number;
 }
 
-interface SweepToggles {
-  resp: boolean;
-  rrsp: boolean;
-  fhsa: boolean;
-  bank: boolean;
-}
+type SweepTarget = "resp" | "rrsp" | "fhsa" | "bank";
 
 interface StrategyInput {
   age: number;
@@ -272,12 +267,7 @@ export default function StrategyPage() {
     respRoomCad: 2500,
     expectedTaxRateInRetirement: 0.3,
   });
-  const [sweep, setSweep] = useState<SweepToggles>({
-    resp: true,
-    rrsp: true,
-    fhsa: true,
-    bank: true,
-  });
+  const [sweepTarget, setSweepTarget] = useState<SweepTarget>("rrsp");
   const [compoundInsideTfsa, setCompoundInsideTfsa] = useState(true);
   const [accounts, setAccounts] = useState<AccountInput[]>([
     { id: uid(), type: "RRIF", balance: 500000, annualReturnPct: 5 },
@@ -301,7 +291,15 @@ export default function StrategyPage() {
     try {
       const parsed = JSON.parse(raw);
       if (parsed?.input) setInput(sanitizeStrategyInput(parsed.input));
-      if (parsed?.sweep) setSweep(parsed.sweep);
+      if (parsed?.sweepTarget && ["resp", "rrsp", "fhsa", "bank"].includes(parsed.sweepTarget)) {
+        setSweepTarget(parsed.sweepTarget as SweepTarget);
+      } else if (parsed?.sweep) {
+        const legacySweep = parsed.sweep as Partial<Record<SweepTarget, boolean>>;
+        if (legacySweep.resp) setSweepTarget("resp");
+        else if (legacySweep.rrsp) setSweepTarget("rrsp");
+        else if (legacySweep.fhsa) setSweepTarget("fhsa");
+        else setSweepTarget("bank");
+      }
       if (typeof parsed?.compoundInsideTfsa === "boolean") setCompoundInsideTfsa(parsed.compoundInsideTfsa);
       if (Array.isArray(parsed?.accounts)) setAccounts(sanitizeAccounts(parsed.accounts));
       if (typeof parsed?.includePartner === "boolean") setIncludePartner(parsed.includePartner);
@@ -318,7 +316,7 @@ export default function StrategyPage() {
       STORAGE_KEY,
       JSON.stringify({
         input,
-        sweep,
+        sweepTarget,
         compoundInsideTfsa,
         accounts,
         includePartner,
@@ -326,7 +324,7 @@ export default function StrategyPage() {
         isDarkMode,
       })
     );
-  }, [input, sweep, compoundInsideTfsa, accounts, includePartner, partner, isDarkMode]);
+  }, [input, sweepTarget, compoundInsideTfsa, accounts, includePartner, partner, isDarkMode]);
 
   const themed = (light: string, dark: string) => (isDarkMode ? dark : light);
   const beginNumberDraft = (key: string, value: number) => {
@@ -398,30 +396,25 @@ export default function StrategyPage() {
 
   const dividendReinvestVsRegistered = useMemo(() => {
     const div = annualTfsaDividendCashCad;
-    let remaining = div;
     let rrspFromDiv = 0;
     let fhsaFromDiv = 0;
     let respFromDiv = 0;
     let grant = 0;
+    let sweepAllocation = 0;
 
-    if (remaining > 0 && sweep.resp) {
-      const alloc = Math.min(remaining, input.respRoomCad);
-      if (alloc > 0) {
-        respFromDiv = alloc;
-        remaining -= alloc;
-        const rawGrant = alloc * 0.2;
-        grant += Math.min(rawGrant, 500);
-      }
-    }
-    if (remaining > 0 && sweep.rrsp) {
-      const alloc = Math.min(remaining, input.rrspRoomCad);
-      rrspFromDiv = alloc;
-      remaining -= alloc;
-    }
-    if (remaining > 0 && sweep.fhsa) {
-      const alloc = Math.min(remaining, input.fhsaRoomCad);
-      fhsaFromDiv = alloc;
-      remaining -= alloc;
+    if (sweepTarget === "resp") {
+      sweepAllocation = Math.min(div, input.respRoomCad);
+      respFromDiv = sweepAllocation;
+      const rawGrant = sweepAllocation * 0.2;
+      grant += Math.min(rawGrant, 500);
+    } else if (sweepTarget === "rrsp") {
+      sweepAllocation = Math.min(div, input.rrspRoomCad);
+      rrspFromDiv = sweepAllocation;
+    } else if (sweepTarget === "fhsa") {
+      sweepAllocation = Math.min(div, input.fhsaRoomCad);
+      fhsaFromDiv = sweepAllocation;
+    } else {
+      sweepAllocation = div;
     }
 
     const taxRefundFromSweep = (rrspFromDiv + fhsaFromDiv) * bracketRate;
@@ -435,6 +428,8 @@ export default function StrategyPage() {
       rrspFromDiv,
       fhsaFromDiv,
       respFromDiv,
+      sweepAllocation,
+      unallocatedDividends: Math.max(0, div - sweepAllocation),
       grant,
       taxRefundFromSweep,
       registeredScore,
@@ -448,9 +443,7 @@ export default function StrategyPage() {
     input.fhsaRoomCad,
     input.rrspRoomCad,
     input.respRoomCad,
-    sweep.fhsa,
-    sweep.resp,
-    sweep.rrsp,
+    sweepTarget,
   ]);
 
   const strategyResults = useMemo<StrategyResult[]>(() => {
@@ -464,31 +457,29 @@ export default function StrategyPage() {
     const nonRegTaxableReturnProxy = input.assumedTfsaDividendYield + input.assumedNonRegCapitalAppreciation;
     const tfsaShelterValue = compoundInsideTfsa ? tfsaContrib * nonRegTaxableReturnProxy * bracketRate : 0;
 
-    const sweepOrder: { key: keyof SweepToggles; room: number; taxCreditRate: number; grantRate: number; cap?: number; label: string }[] = [
-      { key: "resp", room: input.respRoomCad, taxCreditRate: 0, grantRate: 0.2, cap: 500, label: "RESP" },
-      { key: "rrsp", room: input.rrspRoomCad, taxCreditRate: bracketRate, grantRate: 0, label: "RRSP" },
-      { key: "fhsa", room: input.fhsaRoomCad, taxCreditRate: bracketRate, grantRate: 0, label: "FHSA" },
-      { key: "bank", room: Number.POSITIVE_INFINITY, taxCreditRate: 0, grantRate: 0, label: "BANK" },
-    ];
-
-    let remaining = surplus;
     let taxSaved = 0;
     let grant = 0;
     const notes: string[] = [];
-
-    for (const step of sweepOrder) {
-      if (!sweep[step.key]) continue;
-      const alloc = Math.max(0, Math.min(remaining, step.room));
-      if (alloc <= 0) continue;
-      remaining -= alloc;
-      taxSaved += alloc * step.taxCreditRate;
-      if (step.grantRate > 0) {
-        const rawGrant = alloc * step.grantRate;
-        grant += typeof step.cap === "number" ? Math.min(rawGrant, step.cap) : rawGrant;
-      }
-      notes.push(`${step.label} receives $${fmt(alloc)}`);
-      if (remaining <= 0) break;
+    let sweepAlloc = 0;
+    let sweepLabel = "BANK";
+    if (sweepTarget === "resp") {
+      sweepAlloc = Math.min(surplus, input.respRoomCad);
+      const rawGrant = sweepAlloc * 0.2;
+      grant += Math.min(rawGrant, 500);
+      sweepLabel = "RESP";
+    } else if (sweepTarget === "rrsp") {
+      sweepAlloc = Math.min(surplus, input.rrspRoomCad);
+      taxSaved += sweepAlloc * bracketRate;
+      sweepLabel = "RRSP";
+    } else if (sweepTarget === "fhsa") {
+      sweepAlloc = Math.min(surplus, input.fhsaRoomCad);
+      taxSaved += sweepAlloc * bracketRate;
+      sweepLabel = "FHSA";
+    } else {
+      sweepAlloc = surplus;
+      sweepLabel = "BANK";
     }
+    notes.push(`${sweepLabel} receives $${fmt(sweepAlloc)}`);
 
     // Net scores: surplus + strategy benefits only. Tax on *existing* non-registered (BANK) balances is shown
     // separately as taxedGrowthDragCad — applying it here made TFSA/compound rows go negative incorrectly.
@@ -535,7 +526,7 @@ export default function StrategyPage() {
     input.tfsaRoomCad,
     input.assumedNonRegCapitalAppreciation,
     input.assumedTfsaDividendYield,
-    sweep,
+    sweepTarget,
   ]);
 
   const best = useMemo(
@@ -597,7 +588,7 @@ export default function StrategyPage() {
             <p className={cx("text-sm", themed("text-slate-600", "text-slate-300"))}>
               Estimated annual cash dividends: <span className="font-semibold">${fmt(dividendReinvestVsRegistered.div)}</span> from TFSA balance{" "}
               <span className="font-semibold">${fmt(tfsaBalance)}</span> at <span className="font-semibold">{pct(input.assumedTfsaDividendYield)}</span>. Rule of thumb
-              compares one-year registered refund (RRSP/FHSA/RESP sweep toggles) vs keeping dividends compounding inside the TFSA (proxy score).
+              compares one-year registered refund from the selected sweep target (RESP/RRSP/FHSA/Bank) vs keeping dividends compounding inside the TFSA (proxy score).
             </p>
             <div
               className={cx(
@@ -621,8 +612,8 @@ export default function StrategyPage() {
                   <span className="font-semibold">${fmt(dividendReinvestVsRegistered.reinvestScore)}</span>
                 </div>
                 <div className={cx("text-xs", themed("text-slate-600", "text-slate-400"))}>
-                  Sweep allocation from dividends: RESP ${fmt(dividendReinvestVsRegistered.respFromDiv)} | RRSP ${fmt(dividendReinvestVsRegistered.rrspFromDiv)} | FHSA $
-                  {fmt(dividendReinvestVsRegistered.fhsaFromDiv)}. RESP grant (simplified): ${fmt(dividendReinvestVsRegistered.grant)}.
+                  Sweep target: <span className="font-semibold uppercase">{sweepTarget}</span>. Allocation from dividends: RESP ${fmt(dividendReinvestVsRegistered.respFromDiv)} | RRSP ${fmt(dividendReinvestVsRegistered.rrspFromDiv)} | FHSA $
+                  {fmt(dividendReinvestVsRegistered.fhsaFromDiv)} | Unallocated ${fmt(dividendReinvestVsRegistered.unallocatedDividends)}. RESP grant (simplified): ${fmt(dividendReinvestVsRegistered.grant)}.
                 </div>
               </div>
             </div>
@@ -1073,9 +1064,10 @@ export default function StrategyPage() {
                 ].map((t) => (
                   <label key={t.key} className="flex items-center gap-2 text-sm rounded-xl px-3 py-2 glass-panel-soft border border-white/10">
                     <input
-                      type="checkbox"
-                      checked={sweep[t.key as keyof SweepToggles]}
-                      onChange={(e) => setSweep({ ...sweep, [t.key]: e.target.checked })}
+                      type="radio"
+                      name="sweep-target"
+                      checked={sweepTarget === (t.key as SweepTarget)}
+                      onChange={() => setSweepTarget(t.key as SweepTarget)}
                       className="h-4 w-4 accent-cyan-400"
                     />
                     {t.label}
