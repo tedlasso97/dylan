@@ -396,6 +396,13 @@ export default function StrategyPage() {
 
   const dividendReinvestVsRegistered = useMemo(() => {
     const div = annualTfsaDividendCashCad;
+    const yearsToRetirement = clamp(65 - input.age, 1, 40);
+    const growthFactor = Math.pow(1 + input.assumedTfsaDividendYield, yearsToRetirement);
+    const nonRegAfterTaxReturn = Math.max(
+      0,
+      (input.assumedTfsaDividendYield + input.assumedNonRegCapitalAppreciation) * (1 - bracketRate)
+    );
+    const nonRegGrowthFactor = Math.pow(1 + nonRegAfterTaxReturn, yearsToRetirement);
     let rrspFromDiv = 0;
     let fhsaFromDiv = 0;
     let respFromDiv = 0;
@@ -418,13 +425,28 @@ export default function StrategyPage() {
     }
 
     const taxRefundFromSweep = (rrspFromDiv + fhsaFromDiv) * bracketRate;
-    const registeredScore = taxRefundFromSweep + grant;
-    const reinvestScore = div * input.assumedTfsaDividendYield;
+    const reinvestFutureValue = div * growthFactor;
+    let sweepFutureValue = 0;
+    if (sweepTarget === "rrsp" || sweepTarget === "fhsa") {
+      // RRSP/FHSA contribution grows, then use expected retirement rate as a simple withdrawal tax proxy.
+      sweepFutureValue =
+        sweepAllocation * growthFactor * (1 - input.expectedTaxRateInRetirement) +
+        taxRefundFromSweep * growthFactor;
+    } else if (sweepTarget === "resp") {
+      sweepFutureValue = (sweepAllocation + grant) * growthFactor;
+    } else {
+      // Non-registered compounding uses after-tax return proxy.
+      sweepFutureValue = sweepAllocation * nonRegGrowthFactor;
+    }
+
+    const registeredScore = sweepFutureValue;
+    const reinvestScore = reinvestFutureValue;
     const pick: "reinvest" | "sweep" =
       div <= 0 ? "reinvest" : registeredScore >= reinvestScore ? "sweep" : "reinvest";
 
     return {
       div,
+      yearsToRetirement,
       rrspFromDiv,
       fhsaFromDiv,
       respFromDiv,
@@ -432,6 +454,9 @@ export default function StrategyPage() {
       unallocatedDividends: Math.max(0, div - sweepAllocation),
       grant,
       taxRefundFromSweep,
+      sweepFutureValue,
+      reinvestFutureValue,
+      nonRegAfterTaxReturn,
       registeredScore,
       reinvestScore,
       pick,
@@ -439,6 +464,9 @@ export default function StrategyPage() {
   }, [
     annualTfsaDividendCashCad,
     bracketRate,
+    input.age,
+    input.expectedTaxRateInRetirement,
+    input.assumedNonRegCapitalAppreciation,
     input.assumedTfsaDividendYield,
     input.fhsaRoomCad,
     input.rrspRoomCad,
@@ -588,7 +616,7 @@ export default function StrategyPage() {
             <p className={cx("text-sm", themed("text-slate-600", "text-slate-300"))}>
               Estimated annual cash dividends: <span className="font-semibold">${fmt(dividendReinvestVsRegistered.div)}</span> from TFSA balance{" "}
               <span className="font-semibold">${fmt(tfsaBalance)}</span> at <span className="font-semibold">{pct(input.assumedTfsaDividendYield)}</span>. Rule of thumb
-              compares one-year registered refund from the selected sweep target (RESP/RRSP/FHSA/Bank) vs keeping dividends compounding inside the TFSA (proxy score).
+              compares projected value at retirement ({dividendReinvestVsRegistered.yearsToRetirement} years) for sweeping this year&apos;s dividends to one selected target vs reinvesting them inside TFSA.
             </p>
             <div
               className={cx(
@@ -600,20 +628,22 @@ export default function StrategyPage() {
               )}
             >
               <div className="font-semibold">
-                {dividendReinvestVsRegistered.pick === "sweep" ? "Lean: sweep dividends to registered (this year)" : "Lean: reinvest dividends inside TFSA (this year)"}
+                {dividendReinvestVsRegistered.pick === "sweep"
+                  ? "Lean: sweep this year's dividends to selected target"
+                  : "Lean: reinvest this year's dividends inside TFSA"}
               </div>
               <div className={cx("mt-2 space-y-1", themed("text-slate-700", "text-slate-200"))}>
                 <div>
-                  Registered sweep score (refund + RESP grant):{" "}
-                  <span className="font-semibold">${fmt(dividendReinvestVsRegistered.registeredScore)}</span>
+                  Sweep projected value at retirement:{" "}
+                  <span className="font-semibold">${fmt(dividendReinvestVsRegistered.sweepFutureValue)}</span>
                 </div>
                 <div>
-                  Reinvest proxy (tax-free dividend-on-dividend compounding):{" "}
-                  <span className="font-semibold">${fmt(dividendReinvestVsRegistered.reinvestScore)}</span>
+                  Reinvest projected value at retirement (TFSA tax-free compounding):{" "}
+                  <span className="font-semibold">${fmt(dividendReinvestVsRegistered.reinvestFutureValue)}</span>
                 </div>
                 <div className={cx("text-xs", themed("text-slate-600", "text-slate-400"))}>
                   Sweep target: <span className="font-semibold uppercase">{sweepTarget}</span>. Allocation from dividends: RESP ${fmt(dividendReinvestVsRegistered.respFromDiv)} | RRSP ${fmt(dividendReinvestVsRegistered.rrspFromDiv)} | FHSA $
-                  {fmt(dividendReinvestVsRegistered.fhsaFromDiv)} | Unallocated ${fmt(dividendReinvestVsRegistered.unallocatedDividends)}. RESP grant (simplified): ${fmt(dividendReinvestVsRegistered.grant)}.
+                  {fmt(dividendReinvestVsRegistered.fhsaFromDiv)} | Unallocated ${fmt(dividendReinvestVsRegistered.unallocatedDividends)}. RESP grant (simplified): ${fmt(dividendReinvestVsRegistered.grant)} | RRSP/FHSA tax refund now: ${fmt(dividendReinvestVsRegistered.taxRefundFromSweep)}.
                 </div>
               </div>
             </div>
