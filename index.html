@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TFSA Strategy Advisor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <style>
+    :root{
+      --bg:#141414; --card:#1e1e1e; --border:#2a2a2a; --txt:#fff; --sec:#888;
+      --green:#22c55e; --red:#ef4444; --blue:#3b82f6; --muted:#aaaaaa;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--txt);font-family:Inter,sans-serif}
+    .page{max-width:1220px;margin:0 auto;padding:28px 24px 34px}
+    .header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+    h1{font-size:28px;font-weight:600;margin:0;color:#fff}
+    .sub{margin-top:6px;font-size:14px;color:#888}
+    .btn{border:1px solid #333;background:transparent;color:#fff;border-radius:8px;padding:8px 16px;font-size:12px;cursor:pointer}
+    .card{margin-top:18px;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px}
+    .label11{font-size:11px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:#888;margin-bottom:12px}
+    .province-wrap{margin-bottom:14px}
+    .province-wrap .label11{margin-bottom:8px}
+    select{
+      background:#1e1e1e;border:1px solid #2a2a2a;color:#ffffff;border-radius:8px;
+      padding:8px 12px;font-size:14px;font-family:Inter,sans-serif;width:100%;cursor:pointer;
+    }
+    select:focus{outline:none;border-color:#555}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+    .divider{border:0;border-top:1px solid var(--border);margin:16px 0}
+    .slider-row{display:grid;grid-template-columns:minmax(180px,260px) minmax(180px,260px);align-items:center;gap:12px;min-height:42px}
+    .slider-row label{font-size:14px;color:#cfd2da}
+    .field-wrap{
+      position:relative;display:flex;align-items:center;height:38px;border-radius:11px;
+      border:1px solid #2f3442;background:linear-gradient(180deg,#181c25 0%, #141821 100%);
+      transition:border-color .15s ease, box-shadow .15s ease, background .15s ease;
+    }
+    .field-wrap:focus-within{border-color:#525f78;box-shadow:0 0 0 2px rgba(99,102,241,.22);background:#171c27}
+    .num-input{
+      width:100%;height:100%;border:0;background:transparent;color:#f8fafc;
+      font-size:14px;padding:0 56px 0 12px;outline:none;text-align:right;font-variant-numeric:tabular-nums;
+    }
+    .num-input::-webkit-outer-spin-button,.num-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+    .num-input[type=number]{-moz-appearance:textfield}
+    .input-unit{
+      position:absolute;right:10px;top:50%;transform:translateY(-50%);
+      font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8c93a5;
+      pointer-events:none;
+    }
+    .toggle-row{display:flex;justify-content:space-between;align-items:center;min-height:40px}
+    .toggle-row .tlabel{font-size:14px;color:#ccc}
+    .toggle{
+      width:46px;height:24px;border-radius:999px;border:1px solid #333;background:#333;position:relative;cursor:pointer
+    }
+    .toggle.on{background:var(--green)}
+    .toggle::after{
+      content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;background:#fff;border-radius:50%;transition:left .2s
+    }
+    .toggle.on::after{left:24px}
+    .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}
+    .metric{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+    .metric .m-label{font-size:13px;color:#888}
+    .metric .m-val{margin-top:8px;font-size:26px;font-weight:600;color:#fff}
+    .metric .m-sub{margin-top:6px;font-size:12px;color:#888}
+    .winner{border:2px solid var(--green);position:relative}
+    .best-badge{position:absolute;right:12px;top:12px;font-size:11px;color:var(--green);font-weight:600}
+    .option-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+    .option{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
+    .option-name{font-size:14px;font-weight:600}
+    .option-val{margin-top:8px;font-size:22px;font-weight:600}
+    .delta{margin-top:4px;font-size:13px}
+    .rationale{margin-top:6px;font-size:12px;color:#888}
+    .bar{margin-top:8px;height:6px;border-radius:999px;background:#2a2a2a;overflow:hidden}
+    .bar > span{display:block;height:100%;background:#3b82f6}
+    .chart-wrap{height:320px}
+    .legend{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px}
+    .legend-item{display:flex;align-items:center;gap:6px;font-size:12px;color:#888}
+    .sq{width:10px;height:10px;border-radius:2px;display:inline-block}
+    .insights{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:18px}
+    .tile{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
+    .tile .t{font-size:13px;font-weight:600;color:#fff}
+    .tile .v{margin-top:6px;font-size:13px;color:#888}
+    .hidden{display:none!important}
+    ::-webkit-scrollbar{width:10px;height:10px}
+    ::-webkit-scrollbar-track{background:#1a1a1a}
+    ::-webkit-scrollbar-thumb{background:#333}
+    @media (max-width:1280px){.option-grid{grid-template-columns:repeat(2,1fr)}}
+    @media (max-width:980px){.grid2,.metrics,.insights,.option-grid{grid-template-columns:1fr}.slider-row{grid-template-columns:1fr}}
+    @media print{
+      body{background:#fff;color:#000}
+      .page{max-width:100%;padding:20px}
+      #inputCard,#toggleRow,.insights,.no-print{display:none!important}
+      .card,.metric,.option{background:#fff;border-color:#ddd;color:#000}
+      .chart-wrap{height:420px}
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div>
+        <h1>TFSA strategy advisor</h1>
+        <div class="sub">Dividend destination optimizer — Canada 2026</div>
+      </div>
+      <button class="btn no-print" id="printBtn">Print / Export PDF</button>
+    </div>
+
+    <section class="card" id="toggleRow">
+      <div class="label11">Eligibility Toggles</div>
+      <div class="grid2">
+        <div class="toggle-row"><div class="tlabel">Has spouse</div><button class="toggle" id="hasSpouse"></button></div>
+        <div class="toggle-row"><div class="tlabel">RESP eligible — has children</div><button class="toggle" id="respEligible"></button></div>
+      </div>
+      <div class="toggle-row" style="margin-top:10px"><div class="tlabel">FHSA eligible — first-time buyer</div><button class="toggle" id="fhsaEligible"></button></div>
+    </section>
+
+    <section class="card" id="inputCard">
+      <div class="label11">Client Profile</div>
+      <div class="province-wrap">
+        <div class="label11">Province / Territory</div>
+        <select id="provinceSelect">
+          <option value="AB">Alberta</option>
+          <option value="BC">British Columbia</option>
+          <option value="ON">Ontario</option>
+          <option value="QC">Quebec</option>
+          <option value="SK">Saskatchewan</option>
+          <option value="MB">Manitoba</option>
+          <option value="NS">Nova Scotia</option>
+          <option value="NB">New Brunswick</option>
+          <option value="PE">Prince Edward Island</option>
+          <option value="NL">Newfoundland &amp; Labrador</option>
+          <option value="YT">Yukon</option>
+          <option value="NT">Northwest Territories</option>
+          <option value="NU">Nunavut</option>
+        </select>
+      </div>
+      <div class="grid2">
+        <div id="clientCol"></div>
+        <div id="spouseCol"></div>
+      </div>
+      <hr class="divider" />
+      <div class="grid2">
+        <div id="nonRegCol"></div>
+        <div id="tfsaCol"></div>
+      </div>
+      <hr class="divider" />
+      <div id="destCol"></div>
+    </section>
+
+    <section class="card winner" id="winnerCard">
+      <div class="best-badge">BEST OPTION</div>
+      <div class="label11">Recommendation</div>
+      <div id="winnerTitle" style="font-size:16px;font-weight:600;color:var(--green)"></div>
+      <div id="winnerValue" style="margin-top:8px;font-size:26px;font-weight:600"></div>
+      <div id="winnerDelta" style="margin-top:6px;font-size:14px;color:#ccc"></div>
+    </section>
+
+    <section class="metrics">
+      <div class="metric"><div class="m-label">TFSA compound baseline (yr N)</div><div class="m-val" id="mBase"></div><div class="m-sub">After-tax incl. TFSA</div></div>
+      <div class="metric"><div class="m-label">Best strategy net worth (yr N)</div><div class="m-val" id="mBest"></div><div class="m-sub">After-tax incl. TFSA</div></div>
+      <div class="metric"><div class="m-label">Strategy advantage</div><div class="m-val" id="mAdv"></div><div class="m-sub" id="mAdvSub"></div></div>
+      <div class="metric"><div class="m-label">Household MTR blend</div><div class="m-val" id="mMtr"></div><div class="m-sub" id="mMtrSub"></div></div>
+    </section>
+
+    <section class="card">
+      <div class="label11">Scenario Ranking</div>
+      <div class="option-grid" id="optionsGrid"></div>
+    </section>
+
+    <section class="card">
+      <div class="label11">Net Worth Comparison At Year N</div>
+      <div class="legend" id="barLegend"></div>
+      <div class="chart-wrap"><canvas id="barChart"></canvas></div>
+    </section>
+
+    <section class="card">
+      <div class="label11">Net Worth Over Time</div>
+      <div class="legend" id="lineLegend"></div>
+      <div class="chart-wrap"><canvas id="lineChart"></canvas></div>
+    </section>
+
+    <section class="insights" id="insights"></section>
+  </div>
+
+  <script>
+    const state = {
+      hasSpouse: false, respEligible: false, fhsaEligible: false,
+      clientAge:45, clientIncome:95000, clientRRSPRoom:40000,
+      spouseAge:42, spouseIncome:75000, spouseRRSPRoom:25000,
+      clientTFSA:200000, spouseTFSA:100000,
+      tfsaYield:10, tfsaGrowth:3, years:20,
+      nonRegValue:150000, nonRegACBpct:75, nonRegReturn:6, nonRegYield:3, reinvestNonRegYield:true,
+      respValue:0, children:1, youngestAge:8, respGrowth:6,
+      fhsaGrowth:6, mortgageBal:450000, mortgageRate:4.5, mortgageAmort:22,
+      debtBal:25000, debtRate:8, rrspGrowth:6, rrspWithdrawAge:71,
+      province:"AB"
+    };
+    let barChart, lineChart;
+    const annualTFSALimit = 7000, cgInclusion=0.5, rrspRoomCap=31560;
+    const scenarioMeta = {
+      baseline:{name:"TFSA compound (baseline)", rationale:"Tax-free dividends and growth remain inside TFSA.", color:"#ffffff"},
+      rrsp:{name:"Sweep to RRSP", rationale:"Tax deduction + tax-sheltered growth.", color:"#3b82f6"},
+      resp:{name:"Sweep to RESP", rationale:"CESG grant boosts returns.", color:"#a855f7"},
+      fhsa:{name:"Sweep to FHSA", rationale:"Tax deduction + tax-free qualifying withdrawal.", color:"#06b6d4"},
+      mortgage:{name:"Pay down mortgage", rationale:"Guaranteed after-tax return from avoided interest.", color:"#22c55e"},
+      debt:{name:"Pay down other debt", rationale:"Highest guaranteed return if debt rate is high.", color:"#ef4444"},
+      nonreg:{name:"Sweep to non-registered", rationale:"Adds liquidity but taxable drag remains.", color:"#f97316"}
+    };
+
+    const fmtMoney = n => "$" + Math.max(0,n).toLocaleString(undefined,{maximumFractionDigits:2});
+    const fmtM = n => "$" + (n/1e6).toFixed(2) + "M";
+    const fmtPct = n => (n*100).toFixed(1) + "%";
+    const fmtDeltaM = n => `${n>=0?"+":"-"}$${(Math.abs(n)/1e6).toFixed(2)}M`;
+    const clamp = (v,min,max) => Math.min(max,Math.max(min,v));
+    const floor0 = v => Math.max(0,v);
+    const tickMoney = v => Math.abs(v)>=1e6 ? "$"+(v/1e6).toFixed(1)+"M" : "$"+(v/1e3).toFixed(0)+"K";
+
+    const TAX_BRACKETS = {
+      AB:[{from:0,rate:0.25},{from:57376,rate:0.305},{from:114751,rate:0.36},{from:158520,rate:0.39},{from:220001,rate:0.43}],
+      BC:[{from:0,rate:0.205},{from:45655,rate:0.249},{from:57376,rate:0.289},{from:91310,rate:0.319},{from:104835,rate:0.374},{from:114751,rate:0.409},{from:127299,rate:0.435},{from:158520,rate:0.465},{from:220001,rate:0.505}],
+      ON:[{from:0,rate:0.205},{from:51446,rate:0.2415},{from:57376,rate:0.2915},{from:102894,rate:0.3348},{from:114751,rate:0.3748},{from:150000,rate:0.4148},{from:158520,rate:0.4448},{from:220000,rate:0.4897},{from:220001,rate:0.5353}],
+      QC:[{from:0,rate:0.27},{from:51780,rate:0.32},{from:57376,rate:0.37},{from:103545,rate:0.42},{from:114751,rate:0.47},{from:158520,rate:0.5},{from:220001,rate:0.53}],
+      SK:[{from:0,rate:0.25},{from:49720,rate:0.285},{from:57376,rate:0.335},{from:142058,rate:0.365},{from:158520,rate:0.395},{from:220001,rate:0.435}],
+      MB:[{from:0,rate:0.258},{from:36842,rate:0.278},{from:57376,rate:0.328},{from:79625,rate:0.378},{from:114751,rate:0.433},{from:158520,rate:0.463},{from:220001,rate:0.503}],
+      NS:[{from:0,rate:0.2379},{from:29590,rate:0.2879},{from:57376,rate:0.3379},{from:59180,rate:0.3729},{from:93000,rate:0.3929},{from:114751,rate:0.4329},{from:150000,rate:0.4829},{from:158520,rate:0.5029},{from:220001,rate:0.54}],
+      NB:[{from:0,rate:0.294},{from:47715,rate:0.324},{from:57376,rate:0.374},{from:95431,rate:0.394},{from:114751,rate:0.444},{from:158520,rate:0.494},{from:220001,rate:0.534}],
+      PE:[{from:0,rate:0.249},{from:32656,rate:0.289},{from:57376,rate:0.339},{from:64656,rate:0.369},{from:105000,rate:0.409},{from:114751,rate:0.444},{from:140000,rate:0.474},{from:158520,rate:0.504},{from:220001,rate:0.544}],
+      NL:[{from:0,rate:0.237},{from:43198,rate:0.287},{from:57376,rate:0.337},{from:86395,rate:0.387},{from:114751,rate:0.427},{from:154390,rate:0.457},{from:158520,rate:0.487},{from:215943,rate:0.5087},{from:275870,rate:0.5387},{from:551739,rate:0.5487}],
+      YT:[{from:0,rate:0.2152},{from:57376,rate:0.2852},{from:114751,rate:0.3152},{from:158520,rate:0.3452},{from:220001,rate:0.4452},{from:500000,rate:0.3952}],
+      NT:[{from:0,rate:0.2059},{from:50597,rate:0.2559},{from:57376,rate:0.3059},{from:101198,rate:0.3359},{from:114751,rate:0.3859},{from:158520,rate:0.4159},{from:220001,rate:0.4559}],
+      NU:[{from:0,rate:0.19},{from:53268,rate:0.23},{from:57376,rate:0.28},{from:106537,rate:0.3},{from:114751,rate:0.35},{from:158520,rate:0.38},{from:220001,rate:0.42}],
+    };
+
+    function getMarginalRate(income, province){
+      const brackets = [...(TAX_BRACKETS[province] || TAX_BRACKETS.AB)].sort((a,b)=>a.from-b.from);
+      let rate = brackets[0].rate;
+      for (const b of brackets) {
+        if (income >= b.from) rate = b.rate;
+        else break;
+      }
+      return rate;
+    }
+
+    function row(label,key,min,max,step,prefix,container){
+      const d=document.createElement("div"); d.className="slider-row";
+      const l=document.createElement("label"); l.textContent=label;
+      const w=document.createElement("div"); w.className="field-wrap";
+      const s=document.createElement("input");
+      s.type="number"; s.className="num-input"; s.min=min; s.max=max; s.step=step; s.value=String(state[key]);
+      const u=document.createElement("span");
+      u.className="input-unit";
+      u.textContent = prefix === "$" ? "CAD" : prefix === "%" ? "%" : (key.includes("Age") || key.includes("years") || key.includes("Amort")) ? "yrs" : "";
+      const commit=()=>{
+        const parsed=Number(s.value);
+        if(Number.isNaN(parsed)){ s.value=String(state[key]); return; }
+        const next=clamp(parsed,min,max);
+        state[key]=next;
+        s.value=String(next);
+        render();
+      };
+      s.addEventListener("blur", commit);
+      s.addEventListener("keydown", e=>{ if(e.key==="Enter") s.blur(); });
+      w.append(s,u);
+      d.append(l,w); container.appendChild(d);
+    }
+    function toggleRow(label,key,container){
+      const d=document.createElement("div"); d.className="toggle-row";
+      const l=document.createElement("div"); l.className="tlabel"; l.textContent=label;
+      const b=document.createElement("button"); b.className="toggle"+(state[key]?" on":"");
+      b.onclick=()=>{ state[key]=!state[key]; b.className="toggle"+(state[key]?" on":""); buildInputs(); render(); };
+      d.append(l,b); container.appendChild(d);
+    }
+
+    function buildInputs(){
+      const c=document.getElementById("clientCol"), s=document.getElementById("spouseCol"), n=document.getElementById("nonRegCol"), t=document.getElementById("tfsaCol"), d=document.getElementById("destCol");
+      c.innerHTML='<div class="label11">Client</div>';
+      s.innerHTML='<div class="label11">Spouse</div>';
+      n.innerHTML='<div class="label11">Non-Registered Account</div>';
+      t.innerHTML='<div class="label11">TFSA Details</div>';
+      d.innerHTML='<div class="label11">Destination-Specific Inputs</div><div class="grid2" id="destGrid"></div>';
+
+      row("Age","clientAge",30,85,1,"",c);
+      row("Employment income","clientIncome",0,400000,1000,"$",c);
+      row("RRSP contribution room","clientRRSPRoom",0,150000,1000,"$",c);
+
+      if(state.hasSpouse){
+        row("Spouse age","spouseAge",30,85,1,"",s);
+        row("Spouse employment income","spouseIncome",0,400000,1000,"$",s);
+        row("Spouse RRSP room","spouseRRSPRoom",0,150000,1000,"$",s);
+      } else {
+        const p=document.createElement("div");
+        p.style.cssText="font-size:13px;color:#888;line-height:1.5;padding-top:2px";
+        p.textContent="Turn on 'Has spouse' above to include spouse inputs in this projection.";
+        s.appendChild(p);
+      }
+
+      row("Starting market value","nonRegValue",0,2000000,10000,"$",n);
+      row("Starting ACB %","nonRegACBpct",10,100,1,"%",n);
+      const hint=document.createElement("div"); hint.style.cssText="font-size:12px;color:#888;margin:4px 0 8px 0"; hint.textContent="ACB = original cost as % of current value. Lower % = more embedded gain = more tax on transfers."; n.appendChild(hint);
+      row("Expected annual return %","nonRegReturn",0,12,0.5,"%",n);
+      row("Annual yield %","nonRegYield",0,8,0.5,"%",n);
+      toggleRow("Reinvest after-tax non-reg yield?","reinvestNonRegYield",n);
+
+      row("Client TFSA current value","clientTFSA",10000,1000000,5000,"$",t);
+      if(state.hasSpouse) row("Spouse TFSA current value","spouseTFSA",0,500000,5000,"$",t);
+      row("TFSA cash distribution yield %","tfsaYield",6,15,0.5,"%",t);
+      row("TFSA capital growth %","tfsaGrowth",0,10,0.5,"%",t);
+      row("Projection years","years",5,35,1,"",t);
+
+      const dg=document.getElementById("destGrid");
+      const left=document.createElement("div"), right=document.createElement("div");
+      left.innerHTML='<div class="label11">RRSP / RESP / FHSA</div>';
+      right.innerHTML='<div class="label11">Debt / Mortgage</div>';
+      row("RRSP expected growth %","rrspGrowth",0,10,0.5,"%",left);
+      row("RRSP withdrawal age","rrspWithdrawAge",60,90,1,"",left);
+      toggleRow("RESP eligible — has children","respEligible",left);
+      if(state.respEligible){
+        row("RESP current value","respValue",0,200000,5000,"$",left);
+        row("Number of children","children",1,4,1,"",left);
+        row("Youngest child age","youngestAge",1,17,1,"",left);
+        row("RESP growth %","respGrowth",0,10,0.5,"%",left);
+      }
+      toggleRow("FHSA eligible — first-time buyer","fhsaEligible",left);
+      if(state.fhsaEligible) row("FHSA growth %","fhsaGrowth",0,10,0.5,"%",left);
+
+      row("Outstanding mortgage balance","mortgageBal",0,2000000,10000,"$",right);
+      row("Mortgage interest rate %","mortgageRate",1,10,0.25,"%",right);
+      row("Amortization remaining (years)","mortgageAmort",1,30,1,"",right);
+      row("Outstanding debt balance","debtBal",0,500000,5000,"$",right);
+      row("Debt interest rate %","debtRate",1,30,0.25,"%",right);
+      const debtLbl=document.createElement("div"); debtLbl.style.cssText="font-size:12px;color:#888;margin-top:6px"; debtLbl.textContent="e.g. car loan, line of credit, student loan"; right.appendChild(debtLbl);
+      dg.append(left,right);
+
+      document.querySelector("#hasSpouse").className = "toggle"+(state.hasSpouse?" on":"");
+      document.querySelector("#respEligible").className = "toggle"+(state.respEligible?" on":"");
+      document.querySelector("#fhsaEligible").className = "toggle"+(state.fhsaEligible?" on":"");
+    }
+
+    function baseHousehold(){
+      const clientMTR=getMarginalRate(state.clientIncome,state.province);
+      const spouseMTR=state.hasSpouse?getMarginalRate(state.spouseIncome,state.province):clientMTR;
+      const householdMTR=state.hasSpouse?(clientMTR+spouseMTR)/2:clientMTR;
+      return {clientMTR, spouseMTR, householdMTR};
+    }
+
+    function evolveNonReg(nonRegValue,nonRegACB,householdMTR){
+      let growth=nonRegValue*(state.nonRegReturn/100);
+      let grossYield=nonRegValue*(state.nonRegYield/100);
+      let taxYield=grossYield*householdMTR;
+      const netYield=grossYield-taxYield;
+      const endVal=floor0(nonRegValue+growth+(state.reinvestNonRegYield?netYield:0));
+      const latent=Math.max(0,endVal-nonRegACB);
+      const afterTax=endVal - latent*cgInclusion*householdMTR;
+      return {endVal, acb:nonRegACB, taxYield, afterTax};
+    }
+
+    function runScenario(key,years,ctx){
+      let tfsa = state.clientTFSA + (state.hasSpouse?state.spouseTFSA:0);
+      let nonReg = state.nonRegValue;
+      let nonRegACB = state.nonRegValue*(state.nonRegACBpct/100);
+      let rrsp = 0, rrspRoom = state.clientRRSPRoom + (state.hasSpouse?state.spouseRRSPRoom:0), refundCash=0;
+      let resp = state.respValue, respPrincipal=state.respValue, fhsa=0, fhsaContribTotal=0;
+      let mortgageBal=state.mortgageBal, debtBal=state.debtBal, debtBenefit=0, mortgageBenefit=0;
+      let cumCG=0,cumYield=0;
+      const line=[];
+      for(let y=1;y<=years;y++){
+        const div = tfsa*(state.tfsaYield/100);
+        const cap = tfsa*(state.tfsaGrowth/100);
+        let diverted = 0;
+        if(key==="baseline"){
+          tfsa = floor0(tfsa + div + cap);
+        } else {
+          tfsa = floor0(tfsa + cap);
+          let flow = div;
+          if(key==="rrsp"){
+            const contrib=Math.min(flow,rrspRoom); diverted=contrib; rrsp+=contrib; rrspRoom=floor0(rrspRoom-contrib);
+            refundCash += contrib*ctx.householdMTR;
+            rrsp*=1+(state.rrspGrowth/100);
+          } else if(key==="resp" && state.respEligible){
+            const room=2500*state.children; const contrib=Math.min(flow,room); diverted=contrib;
+            const grant=Math.min(contrib*0.2,500*state.children);
+            resp+=contrib+grant; respPrincipal+=contrib; resp*=1+(state.respGrowth/100);
+          } else if(key==="fhsa" && state.fhsaEligible){
+            const remaining=floor0(40000-fhsaContribTotal);
+            const contrib=Math.min(flow,8000,remaining); diverted=contrib; fhsaContribTotal+=contrib; fhsa+=contrib; refundCash += contrib*ctx.householdMTR; fhsa*=1+(state.fhsaGrowth/100);
+          } else if(key==="mortgage" && mortgageBal>0){
+            const pay=Math.min(flow,mortgageBal); diverted=pay; mortgageBal=floor0(mortgageBal-pay); mortgageBenefit += pay*(state.mortgageRate/100);
+          } else if(key==="debt" && debtBal>0){
+            const pay=Math.min(flow,debtBal); diverted=pay; debtBal=floor0(debtBal-pay); debtBenefit += pay*(state.debtRate/100);
+          } else if(key==="nonreg"){
+            diverted=flow; nonReg += flow; nonRegACB += flow;
+          }
+          const excess=floor0(flow-diverted);
+          tfsa += excess + (key==="resp" && (!state.respEligible || y>(18-state.youngestAge)) ? diverted : 0);
+        }
+
+        const transfer = Math.min(nonReg, (state.hasSpouse?2:1)*annualTFSALimit);
+        if(nonReg>0 && transfer>0){
+          const acbRelieved=nonRegACB*(transfer/nonReg);
+          const gain=Math.max(0,transfer-acbRelieved);
+          const cgTax = gain*cgInclusion*ctx.householdMTR;
+          cumCG += cgTax;
+          nonReg = floor0(nonReg-transfer-cgTax);
+          nonRegACB = floor0(nonRegACB-acbRelieved);
+          tfsa += transfer;
+        }
+
+        const nr = evolveNonReg(nonReg,nonRegACB,ctx.householdMTR);
+        nonReg = nr.endVal; nonRegACB = nr.acb; cumYield += nr.taxYield;
+
+        const afterTaxRRSP = rrsp*(1-ctx.householdMTR);
+        const respAfterTax = state.respEligible ? (respPrincipal + Math.max(0,resp-respPrincipal)*0.8) : 0;
+        const net =
+          tfsa + nr.afterTax + afterTaxRRSP + fhsa + refundCash +
+          (state.mortgageBal>0? (state.mortgageBal-mortgageBal + mortgageBenefit):0) +
+          (state.debtBal>0? (state.debtBal-debtBal + debtBenefit):0) + respAfterTax;
+        line.push({year:y, netWorth:net, tfsa, nonRegAfterTax:nr.afterTax, cumCG, cumYield});
+
+        rrspRoom += Math.min(rrspRoomCap,0.18*(state.clientIncome + (state.hasSpouse?state.spouseIncome:0)));
+      }
+      const end=line[line.length-1]||{netWorth:0,tfsa:0,nonRegAfterTax:0,cumCG:0,cumYield:0};
+      return {key, line, end};
+    }
+
+    function scenarioKeys(){
+      const keys=["baseline","rrsp","mortgage","debt","nonreg"];
+      if(state.respEligible) keys.push("resp");
+      if(state.fhsaEligible) keys.push("fhsa");
+      if(state.mortgageBal<=0) keys.splice(keys.indexOf("mortgage"),1);
+      if(state.debtBal<=0) keys.splice(keys.indexOf("debt"),1);
+      return keys;
+    }
+
+    function compute(){
+      const tax=baseHousehold();
+      const keys=scenarioKeys();
+      const results=keys.map(k=>runScenario(k,state.years,tax));
+      const baseline=results.find(r=>r.key==="baseline");
+      const ranked=results
+        .map(r=>({...r, delta:r.end.netWorth-baseline.end.netWorth}))
+        .sort((a,b)=>b.end.netWorth-a.end.netWorth);
+      return {tax, ranked, baseline};
+    }
+
+    function legend(el, items){
+      el.innerHTML = items.map(i=>`<div class="legend-item"><span class="sq" style="background:${i.color}"></span>${i.label}</div>`).join("");
+    }
+    function recommendation(data){
+      const top=data.ranked[0], y=state.years, adv=top.delta;
+      const winner = Math.abs(adv)<1 ? "Strategies are equivalent" : top.key==="baseline" ? "TFSA compound remains preferred" : `${scenarioMeta[top.key].name} is preferred`;
+      document.getElementById("winnerTitle").textContent = `Best use of your TFSA dividends: ${winner}`;
+      document.getElementById("winnerValue").textContent = `Projected net worth at year ${y}: ${fmtM(top.end.netWorth)}`;
+      document.getElementById("winnerDelta").textContent = `vs TFSA compounding alone: ${fmtDeltaM(adv)} advantage`;
+    }
+    function metrics(data){
+      const best=data.ranked[0], base=data.baseline;
+      document.getElementById("mBase").textContent = fmtM(base.end.netWorth);
+      document.getElementById("mBest").textContent = fmtM(best.end.netWorth);
+      document.getElementById("mAdv").textContent = fmtDeltaM(best.delta);
+      document.getElementById("mAdv").style.color = best.delta>=0 ? "#22c55e" : "#ef4444";
+      document.getElementById("mAdvSub").textContent = Math.abs(best.delta)<1 ? `Equivalent at year ${state.years}` : `${best.key==="baseline"?"Baseline":"Best option"} at year ${state.years}`;
+      document.getElementById("mMtr").textContent = fmtPct(data.tax.householdMTR);
+      document.getElementById("mMtrSub").textContent = `Client ${fmtPct(data.tax.clientMTR)} / Spouse ${fmtPct(data.tax.spouseMTR)}`;
+    }
+    function cards(data){
+      const max=Math.max(...data.ranked.map(r=>r.end.netWorth));
+      const grid=document.getElementById("optionsGrid");
+      grid.innerHTML=data.ranked.map((r,i)=>{
+        const isBest=i===0, color=r.delta>=0?"#22c55e":"#ef4444";
+        return `<div class="option ${isBest?"winner":""}">
+          ${isBest?'<div class="best-badge">BEST</div>':""}
+          <div class="option-name">${scenarioMeta[r.key].name}</div>
+          <div class="option-val">${fmtM(r.end.netWorth)}</div>
+          <div class="delta" style="color:${color}">vs baseline: ${fmtDeltaM(r.delta)}</div>
+          <div class="rationale">${scenarioMeta[r.key].rationale}</div>
+          <div class="bar"><span style="width:${(r.end.netWorth/max)*100}%;background:${r.delta<0?'#ef4444':(isBest?'#22c55e':'#3b82f6')}"></span></div>
+        </div>`;
+      }).join("");
+    }
+    function charts(data){
+      const labels=data.ranked.map(r=>scenarioMeta[r.key].name);
+      const vals=data.ranked.map(r=>r.end.netWorth);
+      const colors=data.ranked.map((r,i)=>i===0?"#22c55e":(r.delta<0?"#ef4444":"#3b82f6"));
+      if(barChart) barChart.destroy();
+      barChart=new Chart(document.getElementById("barChart"),{
+        type:"bar",data:{labels,datasets:[{data:vals,backgroundColor:colors,borderRadius:8}]},
+        options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'rgba(255,255,255,0.06)'},ticks:{color:'#666',callback:v=>tickMoney(v)}},y:{grid:{display:false},ticks:{color:'#666'}}}}
+      });
+      legend(document.getElementById("barLegend"), data.ranked.map((r,i)=>({label:scenarioMeta[r.key].name,color:colors[i]})));
+
+      if(lineChart) lineChart.destroy();
+      const lineSets=data.ranked.map((r,i)=>({
+        label:scenarioMeta[r.key].name,
+        data:r.line.map(x=>x.netWorth),
+        borderColor:i===0?"#22c55e":(r.key==="baseline"?"#fff":"#3b82f6"),
+        borderDash:r.key==="baseline"?[6,4]:[],
+        tension:.3,pointRadius:3,pointHoverRadius:5,borderWidth:2
+      }));
+      lineChart=new Chart(document.getElementById("lineChart"),{
+        type:"line",
+        data:{labels:Array.from({length:state.years},(_,i)=>i+1),datasets:lineSets},
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{color:'#666'}},y:{grid:{color:'rgba(255,255,255,0.06)'},ticks:{color:'#666',callback:v=>tickMoney(v)}}}}
+      });
+      legend(document.getElementById("lineLegend"), lineSets.map(s=>({label:s.label,color:s.borderColor})));
+    }
+    function insights(data){
+      const best=data.ranked[0], b=data.baseline;
+      const annualDiv=(state.clientTFSA+(state.hasSpouse?state.spouseTFSA:0))*(state.tfsaYield/100);
+      const arr=[
+        ["Annual TFSA dividends available", fmtMoney(annualDiv)+"/yr"],
+        ["Client marginal tax rate", fmtPct(data.tax.clientMTR)],
+        ["Household TFSA value today", fmtMoney(state.clientTFSA + (state.hasSpouse?state.spouseTFSA:0))],
+        ["Best advantage vs compounding", fmtDeltaM(best.delta)],
+        ["Sweep TFSA balance at yr N", fmtMoney(data.ranked.find(r=>r.key==="baseline")?.end.tfsa||0)],
+        ["Best TFSA balance at yr N", fmtMoney(best.end.tfsa)],
+        ["Sweep cumulative CG tax", fmtMoney(b.end.cumCG)],
+        ["Sweep cumulative yield tax", fmtMoney(b.end.cumYield)]
+      ];
+      document.getElementById("insights").innerHTML=arr.map(([t,v])=>`<div class="tile"><div class="t">${t}</div><div class="v">${v}</div></div>`).join("");
+    }
+    function render(){
+      const data=compute();
+      recommendation(data); metrics(data); cards(data); charts(data); insights(data);
+    }
+
+    document.getElementById("printBtn").onclick=()=>window.print();
+    document.getElementById("hasSpouse").onclick=()=>{state.hasSpouse=!state.hasSpouse;buildInputs();render();};
+    document.getElementById("respEligible").onclick=()=>{state.respEligible=!state.respEligible;buildInputs();render();};
+    document.getElementById("fhsaEligible").onclick=()=>{state.fhsaEligible=!state.fhsaEligible;buildInputs();render();};
+    document.getElementById("provinceSelect").onchange=(e)=>{state.province=e.target.value;render();};
+    document.getElementById("provinceSelect").value = state.province;
+
+    buildInputs();
+    render();
+  </script>
+</body>
+</html>

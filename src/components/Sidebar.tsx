@@ -71,9 +71,8 @@ const Sidebar = ({ isDarkMode = false }: SidebarProps) => {
                 href={href}
                 className={cx(
                   linkBaseClass,
-                  "glass-panel-soft",
-                  themed("hover:bg-white/80 text-slate-700", "hover:bg-white/10 text-slate-200"),
-                  isActive && themed("bg-white/90 text-slate-900 border-white/70", "bg-white/15 text-white border-cyan-300/40")
+                  themed("hover:bg-white/80 text-slate-700", "hover:bg-white/5 text-slate-200"),
+                  isActive && themed("bg-white/90 text-slate-900 border-white/70", "bg-white/10 text-white border border-cyan-300/30")
                 )}
               >
                 <Icon
@@ -93,8 +92,8 @@ const Sidebar = ({ isDarkMode = false }: SidebarProps) => {
               key={label}
               className={cx(
                 linkBaseClass,
-                "glass-panel-soft cursor-not-allowed opacity-90",
-                themed("text-slate-700 border-white/40", "text-slate-200 border-white/10")
+                "cursor-not-allowed opacity-90 border",
+                themed("text-slate-700 border-white/40 bg-white/70", "text-slate-200 border-white/10 bg-white/[0.03]")
               )}
             >
               <FiGitBranch className={cx("h-5 w-5", themed("text-gray-600", "text-gray-400"))} />
