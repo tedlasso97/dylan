@@ -3,7 +3,7 @@ import Layout from "@/components/Layout";
 
 export default function StrategyPage() {
   return (
-    <Layout hideSidebar={false} isDarkMode={true}>
+    <Layout hideSidebar={true} isDarkMode={true}>
       <div className="h-screen w-full bg-black">
         <iframe
           src="/tfsa-dashboard.html"
