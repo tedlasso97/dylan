@@ -653,6 +653,30 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
 .slider-track { flex: 1; }
 
+.slider-value-input {
+  width: 84px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  border-radius: 8px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.slider-value-input:hover { border-color: var(--border); }
+.slider-value-input:focus {
+  outline: none;
+  border-color: #555;
+  background: #1a1a1a;
+}
+.slider-value-input::-webkit-outer-spin-button,
+.slider-value-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.slider-value-input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+
 .province-select {
   width: 100%;
   background: #1a1a1a;
@@ -1292,7 +1316,7 @@ function sliderRow(id, label, min, max, step, val, fmt) {
   return `<div class="slider-row">
     <span class="slider-label">${label}</span>
     <div class="slider-track"><input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${val}"></div>
-    <span class="slider-value" id="${id}-val">${fmt(val)}</span>
+    <input type="number" class="slider-value-input" id="${id}-val" min="${min}" max="${max}" step="${step}" value="${val}" aria-label="${label} value">
   </div>`;
 }
 
@@ -1654,14 +1678,46 @@ function bindInputs() {
     ['debtRate', 'debtRate', f.pct],
   ];
 
-  bindings.forEach(([id, key, fmt]) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('input', () => {
-      S[key] = parseFloat(el.value);
-      const valEl = document.getElementById(id + '-val');
-      if (valEl) valEl.textContent = fmt(S[key]);
+  bindings.forEach(([id, key]) => {
+    const sliderEl = document.getElementById(id);
+    const valEl = document.getElementById(id + '-val');
+    if (!sliderEl || !valEl) return;
+
+    const min = parseFloat(sliderEl.min);
+    const max = parseFloat(sliderEl.max);
+    const step = parseFloat(sliderEl.step) || 1;
+
+    const snapToStep = (value) => {
+      const snapped = min + Math.round((value - min) / step) * step;
+      return Number(snapped.toFixed(6));
+    };
+
+    const clampAndSnap = (value) => {
+      if (!Number.isFinite(value)) return S[key];
+      return Math.min(max, Math.max(min, snapToStep(value)));
+    };
+
+    const applyValue = (value) => {
+      const next = clampAndSnap(value);
+      S[key] = next;
+      sliderEl.value = String(next);
+      valEl.value = String(next);
       render();
+    };
+
+    valEl.value = String(S[key]);
+
+    sliderEl.addEventListener('input', () => {
+      applyValue(parseFloat(sliderEl.value));
+    });
+
+    valEl.addEventListener('input', () => {
+      const typed = parseFloat(valEl.value);
+      if (Number.isFinite(typed)) applyValue(typed);
+    });
+
+    valEl.addEventListener('blur', () => {
+      valEl.value = String(clampAndSnap(parseFloat(valEl.value)));
     });
   });
 
